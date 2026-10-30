@@ -9,7 +9,7 @@ use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Nonce};
 use ed25519_dalek::{Signature, Signer, Verifier, VerifyingKey};
 use hkdf::Hkdf;
 use rand_core::{OsRng, RngCore};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroize;
 
@@ -80,10 +80,43 @@ pub struct Envelope {
 /// An envelope that verified and decrypted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenedEnvelope {
+    pub mode: EnvelopeMode,
     pub from_label: String,
     pub from_verifying_key: [u8; 32],
+    pub from_dh_public: [u8; 32],
+    pub mldsa_vk: Vec<u8>,
     pub body: Vec<u8>,
     pub created_ms: u64,
+}
+
+/// The four-rung trust ladder analyzed in *What the Trust Ladder Keeps Apart*.
+///
+/// Ordered by strictly increasing provenance sufficiency:
+/// `Claimed < Attested < Sealed < Hybrid`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TrustRung {
+    /// Key proven on the wire (TOFU), label and PQ key unpinned.
+    Claimed,
+    /// Classical keys pinned to an out-of-band attested `ContactCard`.
+    Attested,
+    /// Attested peer + local identity verified against keyed `wupz` `seal.bin`.
+    Sealed,
+    /// Attested peer with pinned `ContactCard.pq.mldsa_vk` + dual Ed25519/ML-DSA-65
+    /// and X25519/ML-KEM-768 bound to the v2 header transcript.
+    Hybrid,
+}
+
+/// Formal Revision-Sensitive Projection Certificate $(\pi, \mathbb{V}_\pi, \mathcal{R}_\pi)$
+/// for an `arnauth` envelope trust evaluation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrustProjectionCertificate {
+    pub rung: TrustRung,
+    pub mldsa_key_pinned: bool,
+    pub header_transcript_bound: bool,
+    pub local_seal_keyed: bool,
+    pub retained_subspace: Vec<String>,
+    pub admissible_revisions: Vec<String>,
 }
 
 impl Envelope {
@@ -111,15 +144,19 @@ impl Envelope {
         let from_dh_public = keys.dh_public();
         let mut nonce = [0u8; 12];
         OsRng.fill_bytes(&mut nonce);
+        let created_ms = now_ms();
 
         let header = Header {
             mode: EnvelopeMode::Classical,
+            from_label: &identity.label,
             from_verifying_key: identity.verifying_key,
             from_dh_public,
             to_dh_public,
             ephemeral_public,
             nonce,
             mldsa_vk: &[],
+            mlkem_ct: &[],
+            created_ms,
         };
 
         let shared = ephemeral_secret.diffie_hellman(&PublicKey::from(to_dh_public));
@@ -154,7 +191,7 @@ impl Envelope {
             mldsa_vk: Vec::new(),
             mldsa_signature: Vec::new(),
             mlkem_ct: Vec::new(),
-            created_ms: now_ms(),
+            created_ms,
         })
     }
 
@@ -202,19 +239,24 @@ impl Envelope {
 
         let encapsulation = pq::hybrid_encapsulate(to_dh_public, peer_pq.mlkem_ek())?;
         let ephemeral_public = encapsulation.x25519_ephemeral_public;
+        let mldsa_vk = pq.mldsa_vk();
+        let mlkem_ct = encapsulation.ml_kem_ciphertext;
+        let created_ms = now_ms();
 
         let mut nonce = [0u8; 12];
         OsRng.fill_bytes(&mut nonce);
 
-        let sender_mldsa_vk = pq.mldsa_vk();
         let header = Header {
             mode: EnvelopeMode::Hybrid,
+            from_label: &identity.label,
             from_verifying_key: identity.verifying_key,
             from_dh_public: keys.dh_public(),
             to_dh_public,
             ephemeral_public,
             nonce,
-            mldsa_vk: &sender_mldsa_vk,
+            mldsa_vk: &mldsa_vk,
+            mlkem_ct: &mlkem_ct,
+            created_ms,
         };
 
         let cipher = cipher_for_mode(&encapsulation.combined_key, &header)?;
@@ -245,22 +287,25 @@ impl Envelope {
             nonce,
             ciphertext,
             signature: signature.ed25519,
-            mldsa_vk: sender_mldsa_vk,
+            mldsa_vk,
             mldsa_signature: signature.ml_dsa,
-            mlkem_ct: encapsulation.ml_kem_ciphertext,
-            created_ms: now_ms(),
+            mlkem_ct,
+            created_ms,
         })
     }
 
     fn header(&self) -> Header<'_> {
         Header {
             mode: self.mode,
+            from_label: &self.from_label,
             from_verifying_key: self.from_verifying_key,
             from_dh_public: self.from_dh_public,
             to_dh_public: self.to_dh_public,
             ephemeral_public: self.ephemeral_public,
             nonce: self.nonce,
             mldsa_vk: &self.mldsa_vk,
+            mlkem_ct: &self.mlkem_ct,
+            created_ms: self.created_ms,
         }
     }
 
@@ -354,8 +399,11 @@ impl Envelope {
             .map_err(|e| Error::Decrypt(format!("authentication failed: {e}")))?;
 
         Ok(OpenedEnvelope {
+            mode: self.mode,
             from_label: self.from_label.clone(),
             from_verifying_key: self.from_verifying_key,
+            from_dh_public: self.from_dh_public,
+            mldsa_vk: self.mldsa_vk.clone(),
             body,
             created_ms: self.created_ms,
         })
@@ -406,8 +454,11 @@ impl Envelope {
             .map_err(|e| Error::Decrypt(format!("authentication failed: {e}")))?;
 
         Ok(OpenedEnvelope {
+            mode: self.mode,
             from_label: self.from_label.clone(),
             from_verifying_key: self.from_verifying_key,
+            from_dh_public: self.from_dh_public,
+            mldsa_vk: self.mldsa_vk.clone(),
             body,
             created_ms: self.created_ms,
         })
@@ -431,6 +482,131 @@ impl Envelope {
             }
         }
     }
+
+    /// Verify sender keys against an attested `ContactCard` before or during opening.
+    ///
+    /// Closes Gap 1 in *What the Trust Ladder Keeps Apart*:
+    /// 1. Binds `from_verifying_key` and `from_dh_public` to the attested card.
+    /// 2. If the attested card advertises `PqCard`, refuses classical downgrade
+    ///    AND pins `self.mldsa_vk == pq_card.mldsa_vk` so a post-quantum adversary
+    ///    who can forge Ed25519 cannot substitute an ephemeral ML-DSA-65 keypair.
+    pub fn verify_against_card(&self, peer_card: &ContactCard) -> Result<()> {
+        if self.from_verifying_key != peer_card.verifying_key
+            || self.from_dh_public != peer_card.dh_public
+        {
+            return Err(Error::BadSignature);
+        }
+        if let Some(pq_card) = &peer_card.pq {
+            if self.mode != EnvelopeMode::Hybrid {
+                return Err(Error::Malformed {
+                    what: "envelope",
+                    detail: format!(
+                        "peer {} is attested as hybrid PQ, refusing classical downgrade",
+                        peer_card.label
+                    ),
+                });
+            }
+            if self.mldsa_vk != pq_card.mldsa_vk {
+                return Err(Error::BadSignature);
+            }
+        }
+        Ok(())
+    }
+
+    /// Open an envelope and enforce pinned key sufficiency against `attested_sender`
+    /// when the sender is attested in the address book or hive.
+    pub fn open_verified(
+        &self,
+        keys: &DeviceKeys,
+        pq_keys: Option<&PqBundle>,
+        attested_sender: Option<&ContactCard>,
+    ) -> Result<OpenedEnvelope> {
+        if let Some(card) = attested_sender {
+            self.verify_against_card(card)?;
+        }
+        self.open_any(keys, pq_keys)
+    }
+
+    /// Compute the formal Revision-Sensitive Projection Certificate $(\pi, \mathbb{V}_\pi, \mathcal{R}_\pi)$
+    /// for this envelope on the 4-rung trust ladder (`Claimed`, `Attested`, `Sealed`, `Hybrid`).
+    pub fn project_trust_rung(
+        &self,
+        attested_sender: Option<&ContactCard>,
+        local_seal_keyed: bool,
+    ) -> Result<TrustProjectionCertificate> {
+        self.verify_signature()?;
+        match attested_sender {
+            None => Ok(TrustProjectionCertificate {
+                rung: TrustRung::Claimed,
+                mldsa_key_pinned: false,
+                header_transcript_bound: self.mode == EnvelopeMode::Hybrid,
+                local_seal_keyed,
+                retained_subspace: vec![
+                    "ed25519_self_consistency".into(),
+                    "aead_header_aad".into(),
+                ],
+                admissible_revisions: vec!["tofu_continuation_classical".into()],
+            }),
+            Some(card) => {
+                self.verify_against_card(card)?;
+                let pq_pinned = card
+                    .pq
+                    .as_ref()
+                    .map(|pq| self.mode == EnvelopeMode::Hybrid && self.mldsa_vk == pq.mldsa_vk)
+                    .unwrap_or(false);
+
+                if pq_pinned {
+                    Ok(TrustProjectionCertificate {
+                        rung: TrustRung::Hybrid,
+                        mldsa_key_pinned: true,
+                        header_transcript_bound: true,
+                        local_seal_keyed,
+                        retained_subspace: vec![
+                            "attested_ed25519_vk".into(),
+                            "attested_x25519_dh".into(),
+                            "pinned_mldsa65_vk".into(),
+                            "mlkem768_encapsulation".into(),
+                            "v2_full_header_transcript".into(),
+                        ],
+                        admissible_revisions: vec![
+                            "classical_adversary".into(),
+                            "post_quantum_ed25519_forgery_R_PQ".into(),
+                            "harvest_now_decrypt_later".into(),
+                            "header_metadata_tamper".into(),
+                        ],
+                    })
+                } else if local_seal_keyed {
+                    Ok(TrustProjectionCertificate {
+                        rung: TrustRung::Sealed,
+                        mldsa_key_pinned: false,
+                        header_transcript_bound: false,
+                        local_seal_keyed: true,
+                        retained_subspace: vec![
+                            "attested_ed25519_vk".into(),
+                            "attested_x25519_dh".into(),
+                            "keyed_wupz_0x62_identity_seal".into(),
+                        ],
+                        admissible_revisions: vec![
+                            "classical_adversary".into(),
+                            "local_identity_json_tamper".into(),
+                        ],
+                    })
+                } else {
+                    Ok(TrustProjectionCertificate {
+                        rung: TrustRung::Attested,
+                        mldsa_key_pinned: false,
+                        header_transcript_bound: false,
+                        local_seal_keyed: false,
+                        retained_subspace: vec![
+                            "attested_ed25519_vk".into(),
+                            "attested_x25519_dh".into(),
+                        ],
+                        admissible_revisions: vec!["classical_adversary".into()],
+                    })
+                }
+            }
+        }
+    }
 }
 
 fn verify_classical(verifying_key: &[u8; 32], signed: &[u8], signature: &[u8; 64]) -> Result<()> {
@@ -442,20 +618,26 @@ fn verify_classical(verifying_key: &[u8; 32], signed: &[u8], signature: &[u8; 64
 /// The cleartext header every binding is computed over.
 struct Header<'a> {
     mode: EnvelopeMode,
+    from_label: &'a str,
     from_verifying_key: [u8; 32],
     from_dh_public: [u8; 32],
     to_dh_public: [u8; 32],
     ephemeral_public: [u8; 32],
     nonce: [u8; 12],
     mldsa_vk: &'a [u8],
+    mlkem_ct: &'a [u8],
+    created_ms: u64,
 }
 
 impl Header<'_> {
-    /// Classical bytes are unchanged from v1; hybrid appends a mode byte and the
-    /// sender's ML-DSA-65 verifying key so both signatures, HKDF info, and AEAD
-    /// AAD bind the post-quantum verifying key.
+    /// Classical bytes are unchanged from v1 so a v1 envelope still verifies
+    /// byte for byte. Hybrid (v2) binds the mode byte, `mldsa_vk`, `created_ms`,
+    /// `from_label`, and `SHA-256(mlkem_ct)` into the AAD, HKDF info, and
+    /// dual-signature transcript.
     fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(32 * 4 + 12 + 1 + 4 + self.mldsa_vk.len());
+        let mut out = Vec::with_capacity(
+            32 * 4 + 12 + 1 + 4 + self.mldsa_vk.len() + 8 + 2 + self.from_label.len() + 32,
+        );
         out.extend_from_slice(&self.from_verifying_key);
         out.extend_from_slice(&self.from_dh_public);
         out.extend_from_slice(&self.to_dh_public);
@@ -465,6 +647,11 @@ impl Header<'_> {
             out.push(2);
             out.extend_from_slice(&(self.mldsa_vk.len() as u32).to_le_bytes());
             out.extend_from_slice(self.mldsa_vk);
+            out.extend_from_slice(&self.created_ms.to_le_bytes());
+            out.extend_from_slice(&(self.from_label.len() as u16).to_le_bytes());
+            out.extend_from_slice(self.from_label.as_bytes());
+            let ct_digest: [u8; 32] = Sha256::digest(self.mlkem_ct).into();
+            out.extend_from_slice(&ct_digest);
         }
         out
     }
@@ -801,5 +988,83 @@ mod tests {
         let back: Envelope = serde_json::from_str(&wire).unwrap();
         assert_eq!(back, envelope);
         assert_eq!(back.open(&bob_keys).unwrap().body, b"round trip");
+    }
+
+    #[test]
+    fn hybrid_rejects_unpinned_mldsa_vk_substitution_against_attested_card() {
+        let (alice, alice_keys, _alice_pq, alice_card, _, bob_keys, bob_pq, bob_card) = pq_pair();
+        // Quantum adversary compromises/forges Alice's classical Ed25519 key (`alice_keys`)
+        // and generates a fresh ephemeral ML-DSA-65 bundle (`rogue_pq`).
+        let rogue_pq = PqBundle::generate();
+        let forged = Envelope::seal_with(
+            &alice,
+            &alice_keys,
+            Some(&rogue_pq),
+            &bob_card,
+            b"forged under R_PQ",
+        )
+        .unwrap();
+
+        // Unpinned open_hybrid succeeds on self-consistency alone, which is Gap 1:
+        assert!(forged.open_hybrid(&bob_keys, &bob_pq).is_ok());
+
+        // Pinning against Alice's attested ContactCard rejects the substituted mldsa_vk!
+        assert!(matches!(
+            forged.open_verified(&bob_keys, Some(&bob_pq), Some(&alice_card)),
+            Err(Error::BadSignature)
+        ));
+        assert!(forged.project_trust_rung(Some(&alice_card), true).is_err());
+    }
+
+    #[test]
+    fn hybrid_rejects_downgrade_to_classical_for_attested_pq_peer() {
+        let (alice, alice_keys, _alice_pq, alice_card, _, bob_keys, bob_pq, _) = pq_pair();
+        let downgraded =
+            Envelope::seal(&alice, &alice_keys, bob_keys.dh_public(), b"downgraded").unwrap();
+
+        assert!(matches!(
+            downgraded.open_verified(&bob_keys, Some(&bob_pq), Some(&alice_card)),
+            Err(Error::Malformed { .. })
+        ));
+    }
+
+    #[test]
+    fn hybrid_binds_from_label_and_created_ms_in_header_transcript() {
+        let (alice, alice_keys, alice_pq, _, _, bob_keys, bob_pq, bob_card) = pq_pair();
+        let mut envelope =
+            Envelope::seal_with(&alice, &alice_keys, Some(&alice_pq), &bob_card, b"hi").unwrap();
+        envelope.created_ms += 1;
+        assert!(matches!(
+            envelope.open_hybrid(&bob_keys, &bob_pq),
+            Err(Error::BadSignature)
+        ));
+
+        let mut envelope2 =
+            Envelope::seal_with(&alice, &alice_keys, Some(&alice_pq), &bob_card, b"hi").unwrap();
+        envelope2.from_label = "impostor.eth".into();
+        assert!(matches!(
+            envelope2.open_hybrid(&bob_keys, &bob_pq),
+            Err(Error::BadSignature)
+        ));
+    }
+
+    #[test]
+    fn trust_rung_projection_certificate_distinguishes_claimed_vs_hybrid() {
+        let (alice, alice_keys, alice_pq, alice_card, _, _, _, bob_card) = pq_pair();
+        let envelope =
+            Envelope::seal_with(&alice, &alice_keys, Some(&alice_pq), &bob_card, b"hi").unwrap();
+
+        // Without an attested ContactCard, even a Hybrid-mode envelope projects to Claimed:
+        let claimed_cert = envelope.project_trust_rung(None, true).unwrap();
+        assert_eq!(claimed_cert.rung, TrustRung::Claimed);
+        assert!(!claimed_cert.mldsa_key_pinned);
+
+        // With Alice's attested ContactCard pinning mldsa_vk, it projects to Hybrid:
+        let hybrid_cert = envelope
+            .project_trust_rung(Some(&alice_card), true)
+            .unwrap();
+        assert_eq!(hybrid_cert.rung, TrustRung::Hybrid);
+        assert!(hybrid_cert.mldsa_key_pinned);
+        assert!(hybrid_cert.header_transcript_bound);
     }
 }

@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{Error, Result};
 use crate::keys::{DeviceKeys, SEED_LEN};
-use crate::seal::{seal_row, verify_row, ROW_DOMAIN};
+use crate::seal::{seal_row, seal_row_keyed, verify_row, verify_row_keyed, ROW_DOMAIN};
 use crate::PROTOCOL_VERSION;
 
 /// What kind of label this identity answers to.
@@ -106,6 +106,21 @@ impl Identity {
     /// True when the stored seal still matches the stored contents.
     pub fn verify(&self) -> bool {
         self.protocol == PROTOCOL_VERSION && verify_row(&self.seal, &self.row())
+    }
+
+    /// Compute the keyed balanced-ternary `wupz` seal over this identity row
+    /// using the device's `arnauth/seal/v1` HKDF subkey.
+    pub fn keyed_seal(&self, keys: &DeviceKeys) -> Result<[u8; 32]> {
+        seal_row_keyed(&self.row(), keys.seal_key())
+    }
+
+    /// Verify both the structural `wupz` checksum and the keyed `seal.bin` frame
+    /// bound to the device's secret seed.
+    pub fn verify_keyed(&self, keys: &DeviceKeys, keyed_frame: &[u8; 32]) -> bool {
+        self.verify()
+            && keys.verifying_key() == self.verifying_key
+            && keys.dh_public() == self.dh_public
+            && verify_row_keyed(keyed_frame, &self.row(), keys.seal_key())
     }
 
     pub fn created_seconds(&self) -> u64 {

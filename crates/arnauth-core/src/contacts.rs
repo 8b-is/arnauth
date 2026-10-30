@@ -243,6 +243,39 @@ impl Home {
         }
         Err(Error::NotFound(label))
     }
+
+    /// Resolve an attested `ContactCard` for an incoming envelope sender, checking
+    /// the local address book, own identities, and attested (`!claimed`) hive peers.
+    pub fn resolve_attested_sender(
+        &self,
+        label: &str,
+        verifying_key: &[u8; 32],
+    ) -> Option<ContactCard> {
+        if let Ok(contacts) = Contacts::load(self) {
+            if let Some(card) = contacts
+                .all()
+                .iter()
+                .find(|c| &c.verifying_key == verifying_key || c.label == label)
+            {
+                return Some(card.clone());
+            }
+        }
+        if self.exists(label) {
+            if let Ok(card) = self.card(label) {
+                if &card.verifying_key == verifying_key || card.label == label {
+                    return Some(card);
+                }
+            }
+        }
+        if let Ok(hive) = crate::beehive::Beehive::load(self) {
+            if let Some(peer) = hive.peers.iter().find(|p| {
+                !p.claimed && (&p.card.verifying_key == verifying_key || p.card.label == label)
+            }) {
+                return Some(peer.card.clone());
+            }
+        }
+        None
+    }
 }
 
 #[cfg(test)]

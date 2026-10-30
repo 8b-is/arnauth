@@ -501,7 +501,7 @@ fn run(cli: Cli) -> Result<()> {
             let envelopes: Vec<Envelope> = match &via {
                 Some(addr) => {
                     let client = RelayClient::new(parse_addr(addr)?);
-                    let frames = client.pull(&identity.dh_public)?;
+                    let frames = client.pull_authenticated(&identity.dh_public, &keys)?;
                     frames
                         .iter()
                         .map(|frame| {
@@ -527,7 +527,6 @@ fn run(cli: Cli) -> Result<()> {
             }
 
             let save_dir = save.unwrap_or_else(|| home.root().join("downloads"));
-            let contacts = Contacts::load(&home)?;
             let mut hive = Beehive::load(&home)?;
             let mut opened = 0usize;
             let mut joined = 0usize;
@@ -537,19 +536,16 @@ fn run(cli: Cli) -> Result<()> {
                 Default::default();
 
             for envelope in &envelopes {
-                if let Some(attested) = contacts.get(&envelope.from_label) {
-                    if let Err(e) = envelope.verify_sender_card(attested) {
-                        eprintln!("rejected envelope from {}: {e}", envelope.from_label);
-                        continue;
-                    }
-                }
-                let message = match envelope.open_any(&keys, our_pq.as_ref()) {
-                    Ok(message) => message,
-                    Err(e) => {
-                        eprintln!("rejected one envelope: {e}");
-                        continue;
-                    }
-                };
+                let attested = home
+                    .resolve_attested_sender(&envelope.from_label, &envelope.from_verifying_key);
+                let message =
+                    match envelope.open_verified(&keys, our_pq.as_ref(), attested.as_ref()) {
+                        Ok(message) => message,
+                        Err(e) => {
+                            eprintln!("rejected one envelope: {e}");
+                            continue;
+                        }
+                    };
                 opened += 1;
 
                 let payload = match Payload::decode(&message.body) {
@@ -1047,6 +1043,7 @@ fn run_group(home: &Home, command: GroupCommand) -> Result<()> {
                 Some(label) => home.load(&label)?,
                 None => home.active()?,
             };
+            let our_pq = home.pq(&identity.label)?;
             let mut hive = Beehive::load(home)?;
             let target = hive
                 .peer_by_label(&member)
@@ -1058,11 +1055,12 @@ fn run_group(home: &Home, command: GroupCommand) -> Result<()> {
                 .ok_or_else(|| Error::NotFound(cell.clone()))?
                 .clone();
 
-            group::invite(
+            group::invite_with(
                 &cell_value,
                 &identity,
                 &keys,
-                target.dh_public,
+                our_pq.as_ref(),
+                &target,
                 &Spool::new(home),
             )?;
             hive.add_member(&cell, target.subject, now_ms())?;
@@ -1075,16 +1073,18 @@ fn run_group(home: &Home, command: GroupCommand) -> Result<()> {
                 Some(label) => home.load(&label)?,
                 None => home.active()?,
             };
+            let our_pq = home.pq(&identity.label)?;
             let hive = Beehive::load(home)?;
             let cell_value = hive
                 .cell(&cell)
                 .ok_or_else(|| Error::NotFound(cell.clone()))?
                 .clone();
 
-            let queued = group::send(
+            let queued = group::send_with(
                 &cell_value,
                 &identity,
                 &keys,
+                our_pq.as_ref(),
                 body.as_bytes(),
                 &hive,
                 &Spool::new(home),
@@ -1140,7 +1140,7 @@ fn claimed_card(envelope: &Envelope, message: &OpenedEnvelope) -> ContactCard {
         label,
         kind,
         verifying_key: message.from_verifying_key,
-        dh_public: envelope.from_dh_public,
+        dh_public: message.from_dh_public,
         pq,
     }
 }

@@ -150,7 +150,9 @@ impl App {
         let mut events: Vec<Event> = Vec::new();
 
         for envelope in envelopes {
-            let message = match envelope.open_any(&keys, our_pq.as_ref()) {
+            let attested =
+                home.resolve_attested_sender(&envelope.from_label, &envelope.from_verifying_key);
+            let message = match envelope.open_verified(&keys, our_pq.as_ref(), attested.as_ref()) {
                 Ok(message) => message,
                 Err(e) => {
                     self.note(format!("rejected envelope: {e}"));
@@ -398,7 +400,15 @@ impl App {
                     .cell(&cell_name)
                     .ok_or_else(|| arnauth_core::Error::NotFound(cell_name.clone()))?
                     .clone();
-                let queued = group::send(&cell, &identity, &keys, body.as_bytes(), &hive, &spool)?;
+                let queued = group::send_with(
+                    &cell,
+                    &identity,
+                    &keys,
+                    our_pq.as_ref(),
+                    body.as_bytes(),
+                    &hive,
+                    &spool,
+                )?;
                 return Ok::<_, arnauth_core::Error>(format!(
                     "sealed for {queued} member(s) of {}",
                     cell.name

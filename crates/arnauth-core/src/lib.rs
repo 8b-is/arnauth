@@ -26,7 +26,7 @@ pub mod transport;
 pub use api::{Event, Webhook, Webhooks};
 pub use beehive::{Beehive, Cell, Peer};
 pub use contacts::{ContactCard, Contacts};
-pub use envelope::{Envelope, OpenedEnvelope};
+pub use envelope::{Envelope, OpenedEnvelope, TrustProjectionCertificate, TrustRung};
 pub use error::{Error, Result};
 pub use identity::{Identity, IdentityKind};
 pub use payload::Payload;

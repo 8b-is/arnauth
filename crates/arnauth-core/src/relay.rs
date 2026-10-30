@@ -25,7 +25,11 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 
+use ed25519_dalek::{Signature, Signer, Verifier, VerifyingKey};
+
 use crate::error::{Error, Result};
+use crate::identity::now_ms;
+use crate::keys::DeviceKeys;
 
 /// Frames kept per queue before the oldest is dropped.
 pub const DEFAULT_QUEUE_CAP: usize = 512;
@@ -34,7 +38,10 @@ pub const DEFAULT_QUEUE_CAP: usize = 512;
 /// ~128 KiB of JSON, so this leaves room for a full chunk plus header.
 pub const MAX_FRAME: usize = 4 * 1024 * 1024;
 
+const RELAY_GET_DOMAIN: &[u8] = b"arnauth.relay.get.v1\0";
+
 type Queues = Arc<Mutex<HashMap<String, VecDeque<Vec<u8>>>>>;
+type QueueOwners = Arc<Mutex<HashMap<String, [u8; 32]>>>;
 
 /// A running relay. Dropping it does not stop the accept thread; the thread is
 /// detached and ends with the process.
@@ -59,15 +66,17 @@ impl RelayServer {
             source: e,
         })?;
         let queues: Queues = Arc::new(Mutex::new(HashMap::new()));
+        let owners: QueueOwners = Arc::new(Mutex::new(HashMap::new()));
         let cap = cap.max(1);
 
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(stream) = stream else { continue };
                 let queues = Arc::clone(&queues);
+                let owners = Arc::clone(&owners);
                 std::thread::spawn(move || {
                     // One bad client closes one connection. Nothing else.
-                    let _ = handle(stream, &queues, cap);
+                    let _ = handle(stream, &queues, &owners, cap);
                 });
             }
         });
@@ -80,7 +89,7 @@ impl RelayServer {
     }
 }
 
-fn handle(mut stream: TcpStream, queues: &Queues, cap: usize) -> Result<()> {
+fn handle(mut stream: TcpStream, queues: &Queues, owners: &QueueOwners, cap: usize) -> Result<()> {
     let peer_reader = stream.try_clone().map_err(relay_io)?;
     let mut reader = BufReader::new(peer_reader);
     let mut line = String::new();
@@ -125,6 +134,67 @@ fn handle(mut stream: TcpStream, queues: &Queues, cap: usize) -> Result<()> {
         }
 
         "GET" => {
+            // Closes Gap 3 in *What the Trust Ladder Keeps Apart*:
+            // If the caller provides `<ts_ms> <verifying_key_hex> <sig_hex>`, verify the
+            // Ed25519 signature over `arnauth.relay.get.v1\0 || queue || ts_ms` and pin
+            // the queue to that verifying key so no unauthenticated caller or other key
+            // can drain it.
+            let pinned_owner = {
+                let owners_guard = owners.lock().map_err(|_| relay_poisoned())?;
+                owners_guard.get(queue).copied()
+            };
+
+            if !rest.is_empty() {
+                let mut auth_parts = rest.split_whitespace();
+                let ts_str = auth_parts.next().unwrap_or_default();
+                let vk_hex = auth_parts.next().unwrap_or_default();
+                let sig_hex = auth_parts.next().unwrap_or_default();
+
+                let Ok(ts_ms) = ts_str.parse::<u64>() else {
+                    let _ = stream.write_all(b"ERR auth\n");
+                    return Ok(());
+                };
+                let Ok(vk_bytes) = hex::decode(vk_hex) else {
+                    let _ = stream.write_all(b"ERR auth\n");
+                    return Ok(());
+                };
+                let Ok(vk_arr): std::result::Result<[u8; 32], _> = vk_bytes.try_into() else {
+                    let _ = stream.write_all(b"ERR auth\n");
+                    return Ok(());
+                };
+                let Ok(sig_bytes) = hex::decode(sig_hex) else {
+                    let _ = stream.write_all(b"ERR auth\n");
+                    return Ok(());
+                };
+                let Ok(sig_arr): std::result::Result<[u8; 64], _> = sig_bytes.try_into() else {
+                    let _ = stream.write_all(b"ERR auth\n");
+                    return Ok(());
+                };
+
+                if let Some(owner) = pinned_owner {
+                    if owner != vk_arr {
+                        let _ = stream.write_all(b"ERR auth\n");
+                        return Ok(());
+                    }
+                }
+
+                let Ok(vk) = VerifyingKey::from_bytes(&vk_arr) else {
+                    let _ = stream.write_all(b"ERR auth\n");
+                    return Ok(());
+                };
+                let msg = relay_get_transcript(queue, ts_ms);
+                if vk.verify(&msg, &Signature::from_bytes(&sig_arr)).is_err() {
+                    let _ = stream.write_all(b"ERR auth\n");
+                    return Ok(());
+                }
+
+                let mut owners_guard = owners.lock().map_err(|_| relay_poisoned())?;
+                owners_guard.entry(queue.to_string()).or_insert(vk_arr);
+            } else if pinned_owner.is_some() {
+                let _ = stream.write_all(b"ERR auth\n");
+                return Ok(());
+            }
+
             // GET drains: a courier that re-serves a delivery every poll is a
             // courier that never stops talking.
             let frames: Vec<Vec<u8>> = {
@@ -153,6 +223,14 @@ fn handle(mut stream: TcpStream, queues: &Queues, cap: usize) -> Result<()> {
 
 fn is_queue_name(name: &str) -> bool {
     name.len() == 64 && name.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn relay_get_transcript(queue_hex: &str, ts_ms: u64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(RELAY_GET_DOMAIN.len() + queue_hex.len() + 8);
+    out.extend_from_slice(RELAY_GET_DOMAIN);
+    out.extend_from_slice(queue_hex.as_bytes());
+    out.extend_from_slice(&ts_ms.to_le_bytes());
+    out
 }
 
 fn relay_io(e: std::io::Error) -> Error {
@@ -206,13 +284,35 @@ impl RelayClient {
         expect_ok(&status)
     }
 
-    /// Pull every frame waiting in a queue.
+    /// Pull every frame waiting in a queue (unauthenticated legacy mode).
     pub fn pull(&self, queue: &[u8; 32]) -> Result<Vec<Vec<u8>>> {
+        let cmd = format!("GET {}", hex::encode(queue));
+        self.pull_with_command(&cmd)
+    }
+
+    /// Pull every frame waiting in a queue, authenticating ownership with the
+    /// recipient's Ed25519 signing key and pinning the queue against unauthenticated drains.
+    pub fn pull_authenticated(&self, queue: &[u8; 32], keys: &DeviceKeys) -> Result<Vec<Vec<u8>>> {
+        let queue_hex = hex::encode(queue);
+        let ts_ms = now_ms();
+        let transcript = relay_get_transcript(&queue_hex, ts_ms);
+        let sig = keys.signing().sign(&transcript).to_bytes();
+        let cmd = format!(
+            "GET {} {} {} {}",
+            queue_hex,
+            ts_ms,
+            hex::encode(keys.verifying_key()),
+            hex::encode(sig)
+        );
+        self.pull_with_command(&cmd)
+    }
+
+    fn pull_with_command(&self, cmd: &str) -> Result<Vec<Vec<u8>>> {
         let stream = TcpStream::connect(self.addr).map_err(relay_io)?;
         let mut writer = stream.try_clone().map_err(relay_io)?;
         let mut reader = BufReader::new(stream);
 
-        writeln!(writer, "GET {}", hex::encode(queue)).map_err(relay_io)?;
+        writeln!(writer, "{cmd}").map_err(relay_io)?;
         writer.flush().map_err(relay_io)?;
 
         let mut header = String::new();
@@ -282,6 +382,31 @@ mod tests {
 
         // A second poll finds nothing: GET drains.
         assert!(client.pull(&queue).unwrap().is_empty());
+    }
+
+    #[test]
+    fn authenticated_queue_refuses_unauthenticated_or_wrong_key_drain() {
+        let (_server, client) = relay(8);
+        let (_, alice_keys) = DeviceKeys::generate();
+        let (_, mallory_keys) = DeviceKeys::generate();
+        let queue = alice_keys.dh_public();
+
+        client.push(&queue, b"hello alice").unwrap();
+        let frames = client.pull_authenticated(&queue, &alice_keys).unwrap();
+        assert_eq!(frames, vec![b"hello alice".to_vec()]);
+
+        // Queue is now pinned to Alice's verifying key. Push another message:
+        client.push(&queue, b"protected message").unwrap();
+
+        // Unauthenticated GET is refused and does NOT drain the queue:
+        assert!(client.pull(&queue).is_err());
+
+        // Mallory's authenticated GET with her own key is refused and does NOT drain:
+        assert!(client.pull_authenticated(&queue, &mallory_keys).is_err());
+
+        // Alice still receives her message intact:
+        let frames2 = client.pull_authenticated(&queue, &alice_keys).unwrap();
+        assert_eq!(frames2, vec![b"protected message".to_vec()]);
     }
 
     #[test]

@@ -274,13 +274,16 @@ fn call_tool(home: &Home, params: &Value) -> Result<String> {
             let mut out = String::new();
             let mut events = Vec::new();
             for envelope in &envelopes {
-                let message = match envelope.open_any(&keys, our_pq.as_ref()) {
-                    Ok(message) => message,
-                    Err(e) => {
-                        out.push_str(&format!("[rejected] {e}\n"));
-                        continue;
-                    }
-                };
+                let attested = home
+                    .resolve_attested_sender(&envelope.from_label, &envelope.from_verifying_key);
+                let message =
+                    match envelope.open_verified(&keys, our_pq.as_ref(), attested.as_ref()) {
+                        Ok(message) => message,
+                        Err(e) => {
+                            out.push_str(&format!("[rejected] {e}\n"));
+                            continue;
+                        }
+                    };
                 match Payload::decode(&message.body) {
                     Ok(Payload::Text(text)) => {
                         let body = String::from_utf8_lossy(&text).to_string();

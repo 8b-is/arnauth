@@ -14,6 +14,9 @@ use crate::error::{Error, Result};
 /// Torn from the row domain: any future row layout must change this string.
 pub const ROW_DOMAIN: &[u8] = b"arnauth.row.v1\0";
 
+/// Domain separator for keyed local seals (`arnauth/seal/v1`).
+pub const KEYED_ROW_DOMAIN: &[u8] = b"arnauth.row.keyed.v1\0";
+
 /// One trit per byte, mapping the byte into `{-1, 0, +1}`.
 pub fn trits_for(raw: &[u8]) -> Vec<i8> {
     raw.iter().map(|byte| (byte % 3) as i8 - 1).collect()
@@ -35,6 +38,32 @@ pub fn seal_row(raw: &[u8]) -> Result<[u8; 32]> {
     })?;
 
     Ok(seal_frame_32b(raw, packed, GATE_0X62))
+}
+
+/// Keyed balanced-ternary `wupz` `0x62` fold over `(KEYED_ROW_DOMAIN || seal_key || raw)`.
+///
+/// Closes Gap 2 in *What the Trust Ladder Keeps Apart*: an attacker with write
+/// access to `identity.json` who does not hold the identity seed (`seal_key`)
+/// cannot forge a valid keyed seal even if they recompute the public `seal_row`.
+pub fn seal_row_keyed(raw: &[u8], seal_key: &[u8; 32]) -> Result<[u8; 32]> {
+    let mut keyed = Vec::with_capacity(KEYED_ROW_DOMAIN.len() + 32 + raw.len());
+    keyed.extend_from_slice(KEYED_ROW_DOMAIN);
+    keyed.extend_from_slice(seal_key);
+    keyed.extend_from_slice(raw);
+    let out = seal_row(&keyed);
+    zeroize::Zeroize::zeroize(&mut keyed);
+    out
+}
+
+/// Verify a keyed balanced-ternary `wupz` `0x62` seal frame.
+pub fn verify_row_keyed(frame: &[u8; 32], raw: &[u8], seal_key: &[u8; 32]) -> bool {
+    let mut keyed = Vec::with_capacity(KEYED_ROW_DOMAIN.len() + 32 + raw.len());
+    keyed.extend_from_slice(KEYED_ROW_DOMAIN);
+    keyed.extend_from_slice(seal_key);
+    keyed.extend_from_slice(raw);
+    let ok = verify_row(frame, &keyed);
+    zeroize::Zeroize::zeroize(&mut keyed);
+    ok
 }
 
 /// Recompute the frame and compare it to the stored one.
@@ -80,5 +109,19 @@ mod tests {
     fn empty_row_still_seals() {
         let frame = seal_row(b"").unwrap();
         assert!(verify_row(&frame, b""));
+    }
+
+    #[test]
+    fn keyed_seal_rejects_wrong_key_and_unkeyed_recomputation() {
+        let raw = b"arnauth identity row";
+        let key_a = [0x11u8; 32];
+        let key_b = [0x22u8; 32];
+        let keyed_frame = seal_row_keyed(raw, &key_a).unwrap();
+        assert!(verify_row_keyed(&keyed_frame, raw, &key_a));
+        assert!(!verify_row_keyed(&keyed_frame, raw, &key_b));
+
+        // Even if an attacker recomputes the unkeyed wupz frame, it does not pass verify_row_keyed.
+        let unkeyed_frame = seal_row(raw).unwrap();
+        assert!(!verify_row_keyed(&unkeyed_frame, raw, &key_a));
     }
 }

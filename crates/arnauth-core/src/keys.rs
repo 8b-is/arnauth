@@ -16,22 +16,32 @@ pub const SEED_LEN: usize = 32;
 
 const ED25519_INFO: &[u8] = b"arnauth/ed25519/v1";
 const X25519_INFO: &[u8] = b"arnauth/x25519/v1";
+const SEAL_INFO: &[u8] = b"arnauth/seal/v1";
 
 /// The key material belonging to one identity.
 pub struct DeviceKeys {
     signing: SigningKey,
     dh: StaticSecret,
     dh_public: PublicKey,
+    seal_key: [u8; 32],
+}
+
+impl Drop for DeviceKeys {
+    fn drop(&mut self) {
+        self.seal_key.zeroize();
+    }
 }
 
 impl DeviceKeys {
-    /// Derive both keys from a seed. Deterministic: the same seed always yields
-    /// the same identity keypair.
+    /// Derive both keys and the local wupz seal subkey from a seed.
+    /// Deterministic: the same seed always yields the same identity keypair.
     pub fn from_seed(seed: &[u8; SEED_LEN]) -> Self {
         let mut ed = [0u8; 32];
         let mut x = [0u8; 32];
+        let mut seal_key = [0u8; 32];
         expand(seed, ED25519_INFO, &mut ed);
         expand(seed, X25519_INFO, &mut x);
+        expand(seed, SEAL_INFO, &mut seal_key);
 
         let signing = SigningKey::from_bytes(&ed);
         let dh = StaticSecret::from(x);
@@ -43,6 +53,7 @@ impl DeviceKeys {
             signing,
             dh,
             dh_public,
+            seal_key,
         }
     }
 
@@ -68,6 +79,12 @@ impl DeviceKeys {
 
     pub fn dh_public(&self) -> [u8; 32] {
         self.dh_public.to_bytes()
+    }
+
+    /// Domain-separated 32-byte key for keying the local `wupz` balanced-ternary
+    /// seal (`arnauth/seal/v1`), preventing unkeyed recomputation of `identity.json`.
+    pub fn seal_key(&self) -> &[u8; 32] {
+        &self.seal_key
     }
 }
 

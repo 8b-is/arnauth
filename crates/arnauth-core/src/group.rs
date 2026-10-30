@@ -14,11 +14,13 @@ use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Nonce};
 use rand_core::{OsRng, RngCore};
 
 use crate::beehive::{Beehive, Cell};
+use crate::contacts::ContactCard;
 use crate::envelope::Envelope;
 use crate::error::{Error, Result};
 use crate::identity::Identity;
 use crate::keys::DeviceKeys;
 use crate::payload::Payload;
+use crate::pq::PqBundle;
 use crate::transport::Spool;
 
 const AAD_DOMAIN: &[u8] = b"arnauth.group.v1\0";
@@ -88,6 +90,21 @@ pub fn send(
     hive: &Beehive,
     spool: &Spool,
 ) -> Result<usize> {
+    send_with(cell, identity, keys, None, body, hive, spool)
+}
+
+/// Send one body to every member of `cell`, automatically sealing with hybrid
+/// post-quantum cryptography (`Envelope::seal_with`) for members whose card
+/// advertises a `PqCard`.
+pub fn send_with(
+    cell: &Cell,
+    identity: &Identity,
+    keys: &DeviceKeys,
+    pq: Option<&PqBundle>,
+    body: &[u8],
+    hive: &Beehive,
+    spool: &Spool,
+) -> Result<usize> {
     let (nonce, ciphertext) = seal_body(cell, identity, body)?;
     let payload = Payload::Group {
         cell_id: cell.id,
@@ -101,7 +118,11 @@ pub fn send(
         let Some(peer) = hive.peer(member) else {
             continue;
         };
-        let envelope = Envelope::seal(identity, keys, peer.card.dh_public, &payload)?;
+        let envelope = if pq.is_some() && peer.card.is_hybrid_capable() {
+            Envelope::seal_with(identity, keys, pq, &peer.card, &payload)?
+        } else {
+            Envelope::seal(identity, keys, peer.card.dh_public, &payload)?
+        };
         spool.deliver(peer.card.dh_public, &envelope)?;
         queued += 1;
     }
@@ -125,6 +146,28 @@ pub fn invite(
 
     let envelope = Envelope::seal(identity, keys, member_dh_public, &payload)?;
     spool.deliver(member_dh_public, &envelope)?;
+    Ok(())
+}
+
+/// Hand the cell key to one member using their full `ContactCard`, sealing with
+/// hybrid post-quantum cryptography whenever their card advertises `PqCard`.
+pub fn invite_with(
+    cell: &Cell,
+    identity: &Identity,
+    keys: &DeviceKeys,
+    pq: Option<&PqBundle>,
+    member_card: &ContactCard,
+    spool: &Spool,
+) -> Result<()> {
+    let payload = Payload::KeyWrap {
+        cell_id: cell.id,
+        cell_key: cell.key,
+        name: cell.name.clone(),
+    }
+    .encode();
+
+    let envelope = Envelope::seal_with(identity, keys, pq, member_card, &payload)?;
+    spool.deliver(member_card.dh_public, &envelope)?;
     Ok(())
 }
 

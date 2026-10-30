@@ -119,6 +119,7 @@ impl Home {
         restrict(&dir, 0o700)?;
 
         write_private(&dir.join("key.bin"), &seed)?;
+        write_private(&dir.join("seal.bin"), &identity.keyed_seal(&keys)?)?;
         write_json(&dir.join("identity.json"), &identity)?;
 
         // Post-quantum material lives in its own files so the sealed identity row
@@ -184,6 +185,22 @@ impl Home {
                 what: "key.bin",
                 detail: "key material does not match the sealed row".into(),
             });
+        }
+
+        let keyed_seal_path = dir.join("seal.bin");
+        match fs::read(&keyed_seal_path) {
+            Ok(raw_seal) => {
+                let keyed_seal: [u8; 32] =
+                    raw_seal.try_into().map_err(|v: Vec<u8>| Error::Malformed {
+                        what: "seal.bin",
+                        detail: format!("expected 32 bytes, got {}", v.len()),
+                    })?;
+                if !identity.verify_keyed(&keys, &keyed_seal) {
+                    return Err(Error::SealMismatch);
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(Error::io(&keyed_seal_path, e)),
         }
 
         Ok((identity, keys))
@@ -361,6 +378,26 @@ mod tests {
         row["created_ms"] = serde_json::json!(created + 1);
         fs::write(&path, serde_json::to_string_pretty(&row).unwrap()).unwrap();
 
+        assert!(matches!(
+            home.load("you@mail.com"),
+            Err(Error::SealMismatch)
+        ));
+    }
+
+    #[test]
+    fn recomputed_unkeyed_seal_without_seed_is_rejected_by_keyed_seal() {
+        let home = temp_home("keyed-tamper");
+        home.create("you@mail.com").unwrap();
+
+        let path = home.identity_dir("you@mail.com").join("identity.json");
+        let raw = fs::read_to_string(&path).unwrap();
+        let mut tampered: Identity = serde_json::from_str(&raw).unwrap();
+        tampered.created_ms += 9999;
+        // Attacker recomputes the public unkeyed wupz checksum:
+        tampered.seal = crate::seal::seal_row(&tampered.row()).unwrap();
+        fs::write(&path, serde_json::to_string_pretty(&tampered).unwrap()).unwrap();
+
+        // Keyed seal in seal.bin (bound to arnauth/seal/v1 subkey) rejects it!
         assert!(matches!(
             home.load("you@mail.com"),
             Err(Error::SealMismatch)
