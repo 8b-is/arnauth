@@ -12,7 +12,7 @@ Rust workspace. Two binaries over one library:
 
 ```bash
 cd ~/workspace/peterlodri-sec/arnauth
-cargo test --workspace         # 122 tests, offline
+cargo test --workspace         # 133 tests, offline
 cargo clippy --workspace --all-targets
 cargo fmt --all
 cargo run -p arnauth-desktop
@@ -36,6 +36,11 @@ export ARNAUTH_HOME=/tmp/arnauth-smoke && rm -rf $ARNAUTH_HOME
 ./target/debug/arnauth relay serve --bind 127.0.0.1:8795 &   # then:
 ./target/debug/arnauth send kai.eth "hi" --via 127.0.0.1:8795
 ./target/debug/arnauth inbox --via 127.0.0.1:8795
+
+# plugins and channels
+./target/debug/arnauth plugin add echo --command /bin/cat --event message.received
+./target/debug/arnauth broadcast "hi" --peers --channel saturn.ring
+./target/debug/arnauth plugin test echo
 ```
 
 ## Rules
@@ -58,6 +63,11 @@ export ARNAUTH_HOME=/tmp/arnauth-smoke && rm -rf $ARNAUTH_HOME
   shipping `envelope.v2` and a capability negotiated in the contact card; v1
   messages must keep opening. Do not describe the product as "quantum-proof"
   without the on-chain caveat in `docs/web3-design.md` §2.3.
+- **A plugin runs as the user.** Never add remote installation, a plugin
+  marketplace, or anything that fetches and executes without a human typing
+  `plugin add`. Arguments are shell-quoted; keep it that way.
+- **Broadcast is N envelopes, never a shared key.** One key for many recipients
+  is a group, and groups go through `group` with key handoff.
 - **Webhooks never block.** A delivery failure is logged and swallowed; message
   handling must not depend on someone else's server being up. HTTPS is refused
   on purpose (no TLS in this crate) — do not "fix" it by silently allowing http

@@ -23,6 +23,8 @@ Supersedes nothing. Companion to `docs/web3-design.md` (which is the *why*).
 | REQ-6 | Webhooks: signed JSON POST per event, never blocking message handling |
 | REQ-7 | MCP over stdio, so an agent can drive the store |
 | REQ-8 | A first run that explains itself: `arnauth quickstart` and a GUI guide |
+| REQ-9 | Plugins: commands that receive events on stdin |
+| REQ-10 | Broadcast channels: one body, one envelope per recipient |
 
 ### Out of scope (named so nobody assumes them)
 
@@ -185,6 +187,34 @@ plus a live run: five requests piped into the binary, five valid responses.
 `<home>/my-card.json`, reports seal and PQ status, and prints numbered next
 steps that only include what is actually missing. The GUI opens on a four-step
 guide when the store is empty, and every step folds away once done.
+
+## 4d. REQ-9 — plugins
+
+1. `<home>/plugins.json` holds `{name, command, args, events, description, enabled}`.
+2. A plugin is run through `/bin/sh -c` with the event JSON on **stdin**; stdout
+   is captured, stderr is folded into the failure report.
+3. Arguments are shell-quoted, so `--arg "a b; rm -rf /"` is one argument.
+4. A failing, missing, or silent plugin is reported and never fatal.
+5. A disabled plugin never runs.
+6. **A plugin runs as the user.** The registry is not remote-installable.
+
+Acceptance: `plugin::tests::{registry_round_trips, a_real_plugin_receives_the_event_on_stdin,
+a_failing_plugin_is_reported_not_fatal, dispatch_only_runs_interested_plugins,
+arguments_are_quoted_not_split, a_missing_command_is_reported}`.
+
+## 4e. REQ-10 — broadcast channels
+
+1. `arnauth broadcast <body> --to <label>…` and/or `--peers` (every attested
+   peer) sends **one envelope per recipient** — never a shared key.
+2. `--channel <name>` carries the body as a `Channel` payload (tag `0x05`) so the
+   receiver sees `#name`; without it the body is plain text.
+3. A recipient that fails to resolve or seal is reported and skipped; the
+   command continues and prints `sent/total`.
+4. The sender's own label is never a target.
+
+Acceptance: `payload::tests::{channel_payload_round_trips, a_truncated_channel_name_is_refused}`
+plus a live run: `2/2 sealed on channel saturn.ring`, received and printed by
+both peers.
 
 ## 5. REQ-5 — compatibility
 

@@ -16,6 +16,8 @@ pub const TAG_KEYWRAP: u8 = 0x02;
 pub const TAG_GROUP: u8 = 0x03;
 /// One chunk of a blob.
 pub const TAG_BLOB: u8 = 0x04;
+/// A body posted to a named channel, delivered per recipient.
+pub const TAG_CHANNEL: u8 = 0x05;
 
 /// The decoded contents of an envelope.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,6 +31,10 @@ pub enum Payload {
     Group {
         cell_id: [u8; 16],
         nonce: [u8; 12],
+        body: Vec<u8>,
+    },
+    Channel {
+        name: String,
         body: Vec<u8>,
     },
     Blob {
@@ -63,6 +69,17 @@ impl Payload {
                 out.extend_from_slice(cell_key);
                 out.push(name.len().min(u8::MAX as usize) as u8);
                 out.extend_from_slice(&name[..name.len().min(u8::MAX as usize)]);
+                out
+            }
+            Payload::Channel { name, body } => {
+                let name = name.as_bytes();
+                let name = &name[..name.len().min(u8::MAX as usize)];
+
+                let mut out = Vec::with_capacity(2 + name.len() + body.len());
+                out.push(TAG_CHANNEL);
+                out.push(name.len() as u8);
+                out.extend_from_slice(name);
+                out.extend_from_slice(body);
                 out
             }
             Payload::Blob {
@@ -148,6 +165,23 @@ impl Payload {
                     cell_id,
                     nonce,
                     body: rest[28..].to_vec(),
+                })
+            }
+            TAG_CHANNEL => {
+                let Some(name_len) = rest.first().copied().map(usize::from) else {
+                    return Err(malformed("channel payload has no name length"));
+                };
+                if rest.len() < 1 + name_len {
+                    return Err(malformed("channel name is truncated"));
+                }
+                let name = String::from_utf8(rest[1..1 + name_len].to_vec())
+                    .map_err(|_| malformed("channel name is not utf-8"))?;
+                let name = parse_label(&name)
+                    .map_err(|_| malformed("channel name is not a valid label"))?
+                    .0;
+                Ok(Payload::Channel {
+                    name,
+                    body: rest[1 + name_len..].to_vec(),
                 })
             }
             TAG_BLOB => {
@@ -249,6 +283,21 @@ mod tests {
             body: vec![1, 2, 3, 4],
         };
         assert_eq!(Payload::decode(&payload.encode()).unwrap(), payload);
+    }
+
+    #[test]
+    fn channel_payload_round_trips() {
+        let payload = Payload::Channel {
+            name: "saturn.ring".into(),
+            body: b"to everyone on the channel".to_vec(),
+        };
+        assert_eq!(Payload::decode(&payload.encode()).unwrap(), payload);
+    }
+
+    #[test]
+    fn a_truncated_channel_name_is_refused() {
+        assert!(Payload::decode(&[TAG_CHANNEL, 9, b'a']).is_err());
+        assert!(Payload::decode(&[TAG_CHANNEL]).is_err());
     }
 
     #[test]

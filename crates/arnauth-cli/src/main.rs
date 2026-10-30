@@ -13,6 +13,7 @@ use arnauth_core::group;
 use arnauth_core::identity::{now_ms, parse_label, subject_for, Identity};
 use arnauth_core::media::{chunk_hash, BlobAssembler, BlobChunk, DEFAULT_CHUNK};
 use arnauth_core::payload::Payload;
+use arnauth_core::plugin::{Plugin, Plugins};
 use arnauth_core::relay::{RelayClient, RelayServer};
 use arnauth_core::store::Home;
 use arnauth_core::transport::Spool;
@@ -100,6 +101,30 @@ enum Command {
     /// Serve MCP over stdio, so an agent can drive this store.
     Mcp,
 
+    /// Plugins: commands that react to events, with the event JSON on stdin.
+    Plugin {
+        #[command(subcommand)]
+        command: PluginCommand,
+    },
+
+    /// One body, many recipients. Each envelope is sealed individually.
+    Broadcast {
+        body: String,
+        /// Recipient labels. Repeat the flag.
+        #[arg(long = "to")]
+        to: Vec<String>,
+        /// Send to every attested peer in the beehive.
+        #[arg(long)]
+        peers: bool,
+        /// Carry the body as a named channel instead of plain text.
+        #[arg(long)]
+        channel: Option<String>,
+        #[arg(long)]
+        from: Option<String>,
+        #[arg(long, value_name = "ADDR")]
+        via: Option<String>,
+    },
+
     /// Signed JSON webhooks for systems that are not agents.
     Webhook {
         #[command(subcommand)]
@@ -125,6 +150,33 @@ enum Command {
     Group {
         #[command(subcommand)]
         command: GroupCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum PluginCommand {
+    /// Register a plugin command.
+    Add {
+        name: String,
+        /// The program to run. Its stdin gets the event JSON.
+        #[arg(long)]
+        command: String,
+        /// Argument to pass. Repeat the flag for several.
+        #[arg(long = "arg")]
+        args: Vec<String>,
+        /// Event to react to, e.g. message.received. Repeatable. Default: all.
+        #[arg(long = "event")]
+        events: Vec<String>,
+        #[arg(long)]
+        description: Option<String>,
+    },
+    List,
+    Remove {
+        name: String,
+    },
+    /// Run one plugin now with a synthetic event.
+    Test {
+        name: String,
     },
 }
 
@@ -517,6 +569,18 @@ fn run(cli: Cli) -> Result<()> {
                             text.len(),
                         ));
                     }
+                    Payload::Channel { name, body } => {
+                        println!(
+                            "--- #{name} · {} ({})",
+                            message.from_label, message.created_ms
+                        );
+                        println!("{}", String::from_utf8_lossy(&body));
+                        events.push(Event::message_received(
+                            &message.from_label,
+                            &name,
+                            body.len(),
+                        ));
+                    }
                     Payload::KeyWrap {
                         cell_id,
                         cell_key,
@@ -653,6 +717,19 @@ fn run(cli: Cli) -> Result<()> {
                         }
                     }
                 }
+
+                let plugins = Plugins::load(&home)?;
+                if !plugins.all().is_empty() {
+                    for event in &events {
+                        for run in plugins.dispatch(event) {
+                            if run.ok {
+                                println!("plugin {} → {}", run.name, first_line(&run.output));
+                            } else {
+                                eprintln!("plugin {} failed: {}", run.name, run.output);
+                            }
+                        }
+                    }
+                }
             }
 
             if joined > 0 {
@@ -669,6 +746,109 @@ fn run(cli: Cli) -> Result<()> {
         }
 
         Command::Webhook { command } => run_webhook(&home, command)?,
+
+        Command::Plugin { command } => run_plugin(&home, command)?,
+
+        Command::Broadcast {
+            body,
+            to,
+            peers,
+            channel,
+            from,
+            via,
+        } => {
+            let (identity, keys) = match from {
+                Some(label) => home.load(&label)?,
+                None => home.active()?,
+            };
+            let our_pq = home.pq(&identity.label)?;
+
+            let mut targets = to;
+            if peers {
+                for peer in &Beehive::load(&home)?.peers {
+                    if !peer.claimed {
+                        targets.push(peer.card.label.clone());
+                    }
+                }
+            }
+            targets.retain(|label| *label != identity.label);
+            targets.sort();
+            targets.dedup();
+
+            if targets.is_empty() {
+                return Err(Error::Malformed {
+                    what: "broadcast",
+                    detail: "no recipients: pass --to <label> (repeatable) or --peers".into(),
+                });
+            }
+
+            let payload = match &channel {
+                Some(name) => Payload::Channel {
+                    name: name.clone(),
+                    body: body.clone().into_bytes(),
+                },
+                None => Payload::Text(body.clone().into_bytes()),
+            }
+            .encode();
+
+            let spool = Spool::new(&home);
+            let relay = match &via {
+                Some(addr) => Some(RelayClient::new(parse_addr(addr)?)),
+                None => None,
+            };
+
+            let mut sent = 0usize;
+            for label in &targets {
+                let recipient = match home.resolve_card(label) {
+                    Ok(card) => card,
+                    Err(e) => {
+                        eprintln!("{label}: skipped ({e})");
+                        continue;
+                    }
+                };
+                match Envelope::seal_with(&identity, &keys, our_pq.as_ref(), &recipient, &payload) {
+                    Ok(envelope) => {
+                        let delivered: Result<()> = match &relay {
+                            Some(client) => serde_json::to_vec(&envelope)
+                                .map_err(|e| Error::Codec {
+                                    what: "envelope",
+                                    detail: e.to_string(),
+                                })
+                                .and_then(|frame| client.push(&recipient.dh_public, &frame)),
+                            None => spool
+                                .deliver(recipient.dh_public, &envelope)
+                                .map(|_path| ()),
+                        };
+                        match delivered {
+                            Ok(_) => {
+                                sent += 1;
+                                println!("✓ {label}");
+                            }
+                            Err(e) => eprintln!("{label}: delivery failed ({e})"),
+                        }
+                    }
+                    Err(e) => eprintln!("{label}: not sealed ({e})"),
+                }
+            }
+
+            let mut hive = Beehive::load(&home)?;
+            for label in &targets {
+                if let Ok(card) = home.resolve_card(label) {
+                    hive.learn(card.clone(), now_ms())?;
+                    hive.touch(&card.subject, true, now_ms());
+                }
+            }
+            hive.save(&home)?;
+
+            println!(
+                "{sent}/{} sealed{}",
+                targets.len(),
+                match &channel {
+                    Some(name) => format!(" on channel {name}"),
+                    None => String::new(),
+                }
+            );
+        }
 
         Command::Quickstart { label } => quickstart(&home, label)?,
 
@@ -1176,4 +1356,82 @@ fn quickstart(home: &Home, label: Option<String>) -> Result<()> {
         store.display()
     );
     Ok(())
+}
+
+fn run_plugin(home: &Home, command: PluginCommand) -> Result<()> {
+    match command {
+        PluginCommand::Add {
+            name,
+            command,
+            args,
+            events,
+            description,
+        } => {
+            let mut plugins = Plugins::load(home)?;
+            let plugin = plugins.add(Plugin {
+                name: name.clone(),
+                command,
+                args,
+                events,
+                description: description.unwrap_or_default(),
+                enabled: true,
+            })?;
+            let wanted = plugin.events.join(",");
+            plugins.save()?;
+
+            println!("registered plugin {name}");
+            println!("  events  {wanted}");
+            println!("  note    a plugin runs as you, with the event JSON on stdin");
+        }
+
+        PluginCommand::List => {
+            let plugins = Plugins::load(home)?;
+            if plugins.all().is_empty() {
+                println!("no plugins — `arnauth plugin add notifier --command /usr/bin/say`");
+                return Ok(());
+            }
+            for plugin in plugins.all() {
+                println!(
+                    "{:<20} {:<50} {}{}",
+                    plugin.name,
+                    format!("{} {}", plugin.command, plugin.args.join(" ")).trim(),
+                    plugin.events.join(","),
+                    if plugin.enabled { "" } else { "  (disabled)" }
+                );
+            }
+        }
+
+        PluginCommand::Remove { name } => {
+            let mut plugins = Plugins::load(home)?;
+            if plugins.remove(&name) {
+                plugins.save()?;
+                println!("removed plugin {name}");
+            } else {
+                println!("no plugin named {name}");
+            }
+        }
+
+        PluginCommand::Test { name } => {
+            let plugins = Plugins::load(home)?;
+            let plugin = plugins
+                .get(&name)
+                .ok_or_else(|| Error::NotFound(name.clone()))?;
+            let event = Event {
+                kind: "plugin.test".into(),
+                payload: serde_json::json!({ "note": "synthetic event from `arnauth plugin test`" }),
+            };
+            let run = arnauth_core::plugin::run(plugin, &event);
+            if run.ok {
+                println!("ok    {name}");
+                println!("{}", run.output);
+            } else {
+                println!("fail  {name}: {}", run.output);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn first_line(text: &str) -> String {
+    text.lines().next().unwrap_or_default().to_string()
 }

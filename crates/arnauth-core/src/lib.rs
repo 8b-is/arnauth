@@ -16,6 +16,7 @@ pub mod identity;
 pub mod keys;
 pub mod media;
 pub mod payload;
+pub mod plugin;
 pub mod pq;
 pub mod relay;
 pub mod seal;
@@ -29,6 +30,7 @@ pub use envelope::{Envelope, OpenedEnvelope};
 pub use error::{Error, Result};
 pub use identity::{Identity, IdentityKind};
 pub use payload::Payload;
+pub use plugin::{Plugin, Plugins};
 pub use store::Home;
 
 /// Protocol version for every row, frame, and envelope this crate writes.

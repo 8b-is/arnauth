@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arnauth — your email is a phone number now</title>
+<meta name="description" content="A messenger with no phone number and no server to trust. Talk as an email you already own, or a name you mint. Hybrid post-quantum encryption by default.">
+<style>
+  :root {
+    /* ultralovegod — design.vaked.dev/palettes/8b-is-palettes.json */
+    --bg: #0B0914;
+    --c1: #FF6AC1;
+    --c3: #00E5C9;
+    --c2: #FFD700;
+    --c6: #00FF66;
+    --ink: #EDE7F6;
+    --ink-2: #A79FC0;
+    --ink-3: #6E6685;
+    --line: #241E36;
+    --panel: #100D1C;
+    --panel-2: #16112A;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 400 16px/1.65 var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--c3); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre, kbd { font-family: var(--mono); }
+
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 0 22px; }
+
+  /* nav */
+  nav {
+    position: sticky; top: 0; z-index: 10;
+    backdrop-filter: blur(10px);
+    background: color-mix(in oklab, #0B0914 82%, transparent);
+    border-bottom: 1px solid var(--line);
+  }
+  nav .wrap { display: flex; align-items: center; gap: 18px; height: 58px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; letter-spacing: .01em; }
+  .brand svg { width: 24px; height: 24px; }
+  nav .links { margin-left: auto; display: flex; gap: 16px; font-size: 14px; }
+  nav .links a { color: var(--ink-2); }
+  nav .links a:hover { color: var(--ink); text-decoration: none; }
+  @media (max-width: 760px) { nav .links { display: none; } }
+
+  /* hero */
+  header.hero { padding: 92px 0 68px; text-align: center; position: relative; overflow: hidden; }
+  header.hero::before {
+    content: ""; position: absolute; inset: -30% -10% auto;
+    height: 460px;
+    background: radial-gradient(50% 60% at 50% 40%, color-mix(in oklab, var(--c1) 16%, transparent), transparent 70%);
+    pointer-events: none;
+  }
+  h1 {
+    position: relative;
+    margin: 0 0 18px;
+    font-size: clamp(2.1rem, 5.4vw, 3.6rem);
+    line-height: 1.08;
+    letter-spacing: -.025em;
+    font-weight: 650;
+  }
+  h1 em { font-style: normal; color: var(--c1); }
+  .lede { position: relative; margin: 0 auto 30px; max-width: 620px; font-size: 1.1rem; color: var(--ink-2); }
+  .cta { position: relative; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 12px 20px; border-radius: 11px;
+    font: 600 14.5px/1 var(--sans);
+    border: 1px solid transparent;
+    transition: transform .15s ease, background .15s ease, border-color .15s ease;
+  }
+  .btn:hover { transform: translateY(-1px); text-decoration: none; }
+  .btn.primary { background: var(--c1); color: #1A0714; }
+  .btn.primary:hover { background: #ff85cf; }
+  .btn.ghost { border-color: var(--line); color: var(--ink); background: var(--panel); }
+  .btn.ghost:hover { border-color: var(--c3); color: var(--c3); }
+
+  .install {
+    position: relative;
+    margin: 30px auto 0;
+    max-width: 560px;
+    text-align: left;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--panel);
+    overflow: hidden;
+  }
+  .install .bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; border-bottom: 1px solid var(--line);
+    font: 500 11px/1 var(--mono); color: var(--ink-3); letter-spacing: .08em;
+  }
+  .install .bar i { width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
+  .install pre { margin: 0; padding: 14px 16px; font-size: 12.5px; line-height: 1.75; color: var(--ink-2); overflow-x: auto; }
+  .install pre b { color: var(--c3); font-weight: 500; }
+
+  /* sections */
+  section { padding: 64px 0; border-top: 1px solid var(--line); }
+  .eyebrow { font: 600 10.5px/1 var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--c1); margin-bottom: 12px; }
+  h2 { margin: 0 0 14px; font-size: clamp(1.5rem, 3vw, 2.05rem); letter-spacing: -.015em; font-weight: 620; }
+  .sub { color: var(--ink-2); max-width: 640px; margin: 0 0 34px; }
+
+  /* eli5 cards */
+  .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+  .step {
+    border: 1px solid var(--line); border-radius: 14px; background: var(--panel);
+    padding: 20px;
+  }
+  .step .n { font: 600 11px/1 var(--mono); color: var(--c2); letter-spacing: .12em; }
+  .step h3 { margin: 10px 0 6px; font-size: 1rem; font-weight: 600; }
+  .step p { margin: 0; color: var(--ink-2); font-size: 14.5px; }
+
+  /* table */
+  table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+  th, td { text-align: left; padding: 11px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font: 600 10.5px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); }
+  td code { color: var(--c3); font-size: 13px; }
+  tbody tr:hover { background: color-mix(in oklab, var(--c1) 5%, transparent); }
+
+  /* code blocks */
+  pre.block {
+    margin: 0; padding: 18px; border: 1px solid var(--line); border-radius: 12px;
+    background: var(--panel); overflow-x: auto;
+    font-size: 13px; line-height: 1.8; color: var(--ink-2);
+  }
+  pre.block .c { color: var(--ink-3); }
+  pre.block .k { color: var(--c1); }
+  pre.block .s { color: var(--c6); }
+
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 780px) { .two { grid-template-columns: 1fr; } }
+
+  /* marketplace */
+  .market { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+  .mcard {
+    border: 1px solid var(--line); border-radius: 12px; background: var(--panel-2);
+    padding: 16px;
+  }
+  .mcard h4 { margin: 0 0 6px; font-size: .95rem; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .mcard p { margin: 0; font-size: 13.5px; color: var(--ink-2); }
+  .pill {
+    font: 600 9.5px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase;
+    padding: 4px 6px; border-radius: 5px;
+  }
+  .pill.unverified { color: var(--c2); border: 1px solid color-mix(in oklab, var(--c2) 45%, transparent); background: color-mix(in oklab, var(--c2) 9%, transparent); }
+  .pill.built { color: var(--c6); border: 1px solid color-mix(in oklab, var(--c6) 40%, transparent); background: color-mix(in oklab, var(--c6) 9%, transparent); }
+
+  .note {
+    border-left: 2px solid var(--c2);
+    background: color-mix(in oklab, var(--c2) 6%, transparent);
+    padding: 14px 16px; border-radius: 0 10px 10px 0;
+    color: var(--ink-2); font-size: 14.5px;
+  }
+  .note b { color: var(--c2); }
+
+  /* footer */
+  footer { padding: 44px 0 60px; border-top: 1px solid var(--line); color: var(--ink-3); font-size: 13.5px; }
+  footer .row { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; }
+  footer .love { margin-left: auto; font: 400 12px/1.6 var(--mono); }
+  .constellation { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; font: 400 12px/1 var(--mono); }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <div class="brand">
+      <svg viewBox="0 0 40 40" aria-hidden="true">
+        <circle cx="20" cy="20" r="17" fill="none" stroke="#00E5C9" stroke-opacity=".35" stroke-width="1.4" stroke-dasharray="72 36" stroke-linecap="round" transform="rotate(-28 20 20)"/>
+        <path d="M20 4.5 23.4 15.2 34 18.6 23.4 22 20 32.7 16.6 22 6 18.6 16.6 15.2Z" fill="#FF6AC1"/>
+        <circle cx="20" cy="18.6" r="2.2" fill="#FFD700"/>
+      </svg>
+      Arnauth
+    </div>
+    <div class="links">
+      <a href="#plain">Plain words</a>
+      <a href="#how">How</a>
+      <a href="#integrate">Integrations</a>
+      <a href="#market">Market</a>
+      <a href="https://github.com/8b-is/arnauth">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <h1>Your email is a <em>phone number</em> now.</h1>
+    <p class="lede">
+      Arnauth is a messenger with no phone number and no server to trust.
+      Talk as the address you already own, or a name you mint this morning.
+      Every message is sealed with two locks — one classical, one post-quantum.
+    </p>
+    <div class="cta">
+      <a class="btn primary" href="#start">Get started</a>
+      <a class="btn ghost" href="https://github.com/8b-is/arnauth">Read the code</a>
+    </div>
+
+    <div class="install" id="start">
+      <div class="bar"><i></i><i></i><i></i> <span>terminal</span></div>
+<pre><b>$</b> arnauth quickstart kai.eth
+✓ minted kai.eth (name)
+✓ seal verified: true
+✓ post-quantum keys: ml-dsa-65 + ml-kem-768
+✓ your card: ~/.arnauth/my-card.json</pre>
+    </div>
+  </div>
+</header>
+
+<section id="plain">
+  <div class="wrap">
+    <div class="eyebrow">explain like I'm five</div>
+    <h2>You have a key and a locked box.</h2>
+    <p class="sub">
+      There is no clever metaphor. You put a note in a box, lock it with your
+      friend's lock, and hand it to anyone willing to carry it. Only your friend
+      can open it. The carrier never learns what is inside, or even who it is for.
+    </p>
+    <div class="steps">
+      <div class="step">
+        <div class="n">01</div>
+        <h3>Lock the box</h3>
+        <p>Your friend's public key is the lock. Yours opens it. Nobody, including
+           the app's author, holds both.</p>
+      </div>
+      <div class="step">
+        <div class="n">02</div>
+        <h3>Hand it to a courier</h3>
+        <p>A courier is a folder, a USB stick, or a little program. Arnauth ships
+           one and you can write your own.</p>
+      </div>
+      <div class="step">
+        <div class="n">03</div>
+        <h3>Forget what you don't use</h3>
+        <p>People you stop talking to lose weight and fade out of your list. That
+           is not a bug, it is the design.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <div class="eyebrow">what actually happens</div>
+    <h2>Two locks, four keys, no server.</h2>
+    <p class="sub">
+      Each identity holds one seed. HKDF splits it into an Ed25519 key (who is
+      speaking) and an X25519 key (who may listen). On top of both sits a
+      post-quantum half: ML-DSA-65 for signatures, ML-KEM-768 for key agreement.
+      Either pair alone is enough to reject a forgery.
+    </p>
+    <table>
+      <thead><tr><th>You want</th><th>What Arnauth does</th></tr></thead>
+      <tbody>
+        <tr><td>No phone number</td><td><code>arnauth init you@mail.com</code> or <code>kai.eth</code></td></tr>
+        <tr><td>Sealed messages</td><td>ephemeral X25519 + ML-KEM-768 → HKDF → ChaCha20-Poly1305</td></tr>
+        <tr><td>Proof of sender</td><td>Ed25519 + ML-DSA-65 over the same bytes; both must verify</td></tr>
+        <tr><td>Tamper evidence at rest</td><td>identity rows folded into a 32-byte <code>0x62</code>-gated wupz frame</td></tr>
+        <tr><td>Files</td><td>64 KiB chunks, content-addressed, resumable across restarts</td></tr>
+        <tr><td>Group chats</td><td>one key per cell; the body is sealed once, the key handed out per member</td></tr>
+        <tr><td>Broadcast</td><td>one body, one envelope <em>per recipient</em> — never a shared key</td></tr>
+      </tbody>
+    </table>
+    <p class="note" style="margin-top:22px">
+      <b>Honest caveat.</b> Off-chain messages are hybrid post-quantum. On-chain
+      settlement is only as post-quantum as Ethereum is, which today means
+      secp256k1 — not quantum-safe. We will say that on every page until it is untrue.
+    </p>
+  </div>
+</section>
+
+<section id="integrate">
+  <div class="wrap">
+    <div class="eyebrow">integrations</div>
+    <h2>For systems, and for agents.</h2>
+    <p class="sub">
+      Two outward faces: signed webhooks for anything with an HTTP listener, and
+      MCP for anything that thinks in tools. Plus plugins, which are just commands.
+    </p>
+    <div class="two">
+<pre class="block"><span class="c"># webhook: HMAC-SHA256 over the exact body</span>
+<span class="k">$</span> arnauth webhook add http://127.0.0.1:9000/hook \
+    --event message.received
+
+<span class="c"># every delivery carries</span>
+<span class="s">X-Arnauth-Signature</span>: &lt;hex hmac&gt;
+<span class="s">{"event"</span>:<span class="s">"message.received"</span>, ...}</pre>
+<pre class="block"><span class="c"># plugin: a command with the event on stdin</span>
+<span class="k">$</span> arnauth plugin add notifier \
+    --command /usr/bin/say --arg <span class="s">"new message"</span> \
+    --event message.received
+
+<span class="c"># agent: MCP over stdio, six tools</span>
+<span class="k">$</span> arnauth mcp</pre>
+    </div>
+    <p class="sub" style="margin-top:26px">
+      <code>arnauth mcp</code> exposes <code>arnauth_whoami</code>,
+      <code>arnauth_identities</code>, <code>arnauth_peers</code>,
+      <code>arnauth_send</code>, <code>arnauth_inbox</code>,
+      <code>arnauth_receipt</code>. The tool process runs as you, so it is the
+      credential — there is no token to leak.
+    </p>
+  </div>
+</section>
+
+<section id="market">
+  <div class="wrap">
+    <div class="eyebrow">where this could earn</div>
+    <h2>The market, without the pitch deck.</h2>
+    <p class="sub">
+      Arnauth is free software. Money would come from things people genuinely buy
+      in messengers — stickers, bots, extra cells — not from selling attention.
+    </p>
+    <div class="market">
+      <div class="mcard">
+        <h4>Sticker packs <span class="pill built">built next</span></h4>
+        <p>ERC-1155 packs, 5–10% secondary royalty via EIP-2981. Stickers already
+           work offline as bytes; minting only adds ownership.</p>
+      </div>
+      <div class="mcard">
+        <h4>Bot directory <span class="pill unverified">unverified</span></h4>
+        <p>A manifest per bot, install counter, revenue split. The chain's only
+           real contribution here is portable reputation.</p>
+      </div>
+      <div class="mcard">
+        <h4>Cell subscriptions <span class="pill unverified">unverified</span></h4>
+        <p>Creator cells charge for access; the token check lives in the cell's
+           manifest, not in the transport.</p>
+      </div>
+      <div class="mcard">
+        <h4>Paid subnames <span class="pill unverified">unverified</span></h4>
+        <p><code>you.arnauth.eth</code> instead of a bare label. Pure margin, and
+           it makes the trust ladder screenshot-able.</p>
+      </div>
+    </div>
+    <p class="note" style="margin-top:22px">
+      <b>Verification status.</b> Every distribution surface and take rate on this
+      page is a candidate, not a claim: I could not reach a search API while
+      writing it. Before any integration or spend, check the live docs for
+      Farcaster mini apps, Base ecosystem listings, the ENS app directory,
+      MetaMask Snaps, DappRadar, Zora, and OpenSea. What <em>is</em> verified is
+      local: <code>zeno-engine.js</code> settles VAKED/FOKEN at ¥100 per coin, and
+      FOKEN is a proof-of-contribution gate, not a tips jar.
+    </p>
+  </div>
+</section>
+
+<section id="start2">
+  <div class="wrap">
+    <div class="eyebrow">how to</div>
+    <h2>Three commands to a conversation.</h2>
+    <div class="two">
+<pre class="block"><span class="c"># 1. you</span>
+<span class="k">$</span> arnauth quickstart kai.eth
+<span class="k">$</span> arnauth card kai.eth > my-card.json
+
+<span class="c"># 2. them (send my-card.json however you like)</span>
+<span class="k">$</span> arnauth trust my-card.json</pre>
+<pre class="block"><span class="c"># 3. talk</span>
+<span class="k">$</span> arnauth send kai.eth <span class="s">"hello"</span>
+<span class="k">$</span> arnauth send kai.eth --file photo.jpg
+<span class="k">$</span> arnauth inbox --take --save ~/Downloads
+
+<span class="c"># or open the window</span>
+<span class="k">$</span> arnauth-desktop</pre>
+    </div>
+    <p class="sub" style="margin-top:24px">
+      Lose <code>key.bin</code> and the identity is gone. No recovery, no escrow,
+      no support desk. That is not an oversight — it is the only way "nobody can
+      read it" stays true.
+    </p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="row">
+      <span>AGPL-3.0-only · built with <a href="https://github.com/8b-is/wupz">wupz</a></span>
+      <a href="https://github.com/8b-is/arnauth">source</a>
+      <a href="https://github.com/8b-is/arnauth/blob/main/SPEC.md">spec</a>
+      <a href="https://zeno.vaked.dev">zeno</a>
+      <span class="love">from love, from within · Peter &amp; Nate → Mom (*) &amp; Dad (△)</span>
+    </div>
+    <div class="constellation">
+      <span>vaked constellation:</span>
+      <a href="https://zeno.vaked.dev">zeno.vaked.dev</a>
+      <a href="https://design.vaked.dev">design.vaked.dev</a>
+      <a href="https://pocoo.vaked.dev">pocoo.vaked.dev</a>
+      <a href="https://music.vaked.dev">music.vaked.dev</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

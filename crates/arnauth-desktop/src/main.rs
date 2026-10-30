@@ -241,6 +241,19 @@ impl App {
                         created_ms: message.created_ms,
                     })
                 }
+                Payload::Channel { name, body } => {
+                    events.push(Event::message_received(
+                        &message.from_label,
+                        &name,
+                        body.len(),
+                    ));
+                    self.inbox.push(InboxRow {
+                        channel: format!("#{name}"),
+                        from: message.from_label.clone(),
+                        body: String::from_utf8_lossy(&body).into_owned(),
+                        created_ms: message.created_ms,
+                    })
+                }
                 Payload::KeyWrap {
                     cell_id,
                     cell_key,
@@ -305,6 +318,20 @@ impl App {
                                     "webhook {} failed: {:?}",
                                     delivery.url, delivery.detail
                                 ));
+                            }
+                        }
+                    }
+                }
+            }
+            if let Ok(plugins) = arnauth_core::plugin::Plugins::load(&home) {
+                if !plugins.all().is_empty() {
+                    for event in &events {
+                        for run in plugins.dispatch(event) {
+                            if run.ok {
+                                let first = run.output.lines().next().unwrap_or_default();
+                                self.note(format!("plugin {} → {first}", run.name));
+                            } else {
+                                self.note(format!("plugin {} failed: {}", run.name, run.output));
                             }
                         }
                     }

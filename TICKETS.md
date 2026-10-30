@@ -25,6 +25,11 @@ or it is not.
 | 17 | MCP over stdio | `arnauth mcp`, 6 tools, JSON-RPC on stdin/stdout | 8 `mcp::tests`, plus a 5-request live pipe |
 | 18 | First run that explains itself | `arnauth quickstart`, GUI welcome flow with folding steps | live run on empty and populated stores |
 | 19 | GUI polish | ultralovegod theme, help overlay, honest empty states | both stores launch clean, no panic |
+| 20 | Plugins: commands fed events on stdin | `plugin::{Plugins, Plugin, run}`, CLI `plugin add/list/remove/test`, GUI dispatch | 9 `plugin::tests`, incl. a real `/bin/cat` and shell-quoting |
+| 21 | Broadcast channels | `Payload::Channel` (tag `0x05`), `arnauth broadcast --to/--peers/--channel` | 2 payload tests + live run: `2/2 sealed on channel saturn.ring` |
+| 22 | On PATH + wired into Crush | symlinks in `~/.local/bin`, `mcp.arnauth` in `~/.config/crush/crush.json` (backup kept) | `arnauth --version`, `jq .mcp` shows `arnauth` |
+| 23 | In the vaked constellation | `zeno.vaked.dev/constellation.json` entry `arnauth` (19 projects) | JSON validates, commit `63309d3` pushed |
+| 24 | ELI5 README + landing page | `README.md` rewritten plain-first, `brand/index.html` | HTML tag balance checked; marketplace claims marked unverified |
 
 ## Deliberately not ticketed (out of scope for v1)
 
