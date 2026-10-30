@@ -1,0 +1,17 @@
+[package]
+name = "arnauth-desktop"
+description = "Arnauth desktop: identities, sealed messages, one native window on macOS, Linux, and Windows"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "arnauth-desktop"
+path = "src/main.rs"
+
+[dependencies]
+arnauth-core.workspace = true
+eframe.workspace = true
+hex.workspace = true

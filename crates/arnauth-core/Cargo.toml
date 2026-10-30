@@ -1,0 +1,25 @@
+[package]
+name = "arnauth-core"
+description = "Identity, sealed storage, and end-to-end envelopes for Arnauth"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+wupz-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+hkdf.workspace = true
+hex.workspace = true
+zeroize.workspace = true
+rand_core.workspace = true
+x25519-dalek.workspace = true
+ed25519-dalek.workspace = true
+chacha20poly1305.workspace = true
+ml-kem.workspace = true
+ml-dsa.workspace = true
+dirs.workspace = true

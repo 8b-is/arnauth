@@ -1,0 +1,608 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arnauth — UI design mock</title>
+<style>
+  :root {
+    /* ultralovegod — design.vaked.dev/palettes/8b-is-palettes.json */
+    --bg: #0B0914;
+    --c1: #FF6AC1;   /* primary */
+    --c3: #00E5C9;   /* structural */
+    --c2: #FFD700;   /* hold / claimed */
+    --c6: #00FF66;   /* witness / attested */
+    --prune: #FF3366;
+
+    --ink: #EDE7F6;
+    --ink-2: #A79FC0;
+    --ink-3: #6E6685;
+    --line: #241E36;
+    --panel: #100D1C;
+    --panel-2: #16112A;
+
+    --r: 14px;
+    --pad: 18px;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+
+    --density: comfortable;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 400 14px/1.55 var(--sans);
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+
+  .studio-container { container: app / inline-size; --density: comfortable; }
+
+  @container app (max-width: 980px) { .studio-container { --density: compact; } }
+  @container app (min-width: 1500px) { .studio-container { --density: blueprint; } }
+
+  .app {
+    display: grid;
+    grid-template-columns: 264px minmax(0, 1fr) 308px;
+    grid-template-rows: 52px 1fr 30px;
+    grid-template-areas: "top top top" "rail thread inspect" "foot foot foot";
+    height: 100vh;
+  }
+
+  @container app (max-width: 980px) {
+    .app { grid-template-columns: 220px minmax(0, 1fr); grid-template-areas: "top top" "rail thread" "foot foot"; }
+    .inspect { display: none; }
+  }
+
+  /* ── top bar ───────────────────────────────────────────── */
+  .top {
+    grid-area: top;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, #100D1C 0%, #0B0914 100%);
+  }
+  .mark { display: flex; align-items: center; gap: 10px; }
+  .mark svg { width: 26px; height: 26px; }
+  .mark b { font-weight: 600; letter-spacing: .02em; }
+  .mark span { color: var(--ink-3); font-size: 12px; }
+
+  .cmd {
+    margin-inline: auto;
+    display: flex; align-items: center; gap: 10px;
+    min-width: 320px; max-width: 460px; width: 100%;
+    padding: 7px 12px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--panel-2);
+    color: var(--ink-3);
+    font-size: 13px;
+    cursor: pointer;
+    transition: border-color .15s ease, color .15s ease;
+  }
+  .cmd:hover, .cmd:focus-visible { border-color: var(--c1); color: var(--ink-2); outline: none; }
+  .cmd kbd {
+    margin-left: auto;
+    font: 500 11px/1 var(--mono);
+    padding: 4px 6px;
+    border-radius: 6px;
+    border: 1px solid var(--line);
+    background: #0B0914;
+    color: var(--ink-2);
+  }
+
+  .wallet {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 12px 6px 10px;
+    border: 1px solid color-mix(in oklab, var(--c2) 35%, var(--line));
+    border-radius: 999px;
+    background: color-mix(in oklab, var(--c2) 8%, var(--panel));
+    font: 600 12px/1 var(--mono);
+    color: var(--c2);
+    white-space: nowrap;
+  }
+  .wallet i { width: 6px; height: 6px; border-radius: 50%; background: var(--c2); box-shadow: 0 0 8px var(--c2); }
+
+  /* ── rail ──────────────────────────────────────────────── */
+  .rail {
+    grid-area: rail;
+    border-right: 1px solid var(--line);
+    overflow-y: auto;
+    padding: 12px 10px;
+    background: var(--panel);
+  }
+  .rail h2 {
+    margin: 10px 8px 8px;
+    font: 600 10px/1 var(--mono);
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .rail h2::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+
+  .cell {
+    position: relative;
+    display: grid;
+    grid-template-columns: 30px 1fr auto;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 10px;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background .12s ease;
+  }
+  .cell:hover { background: var(--panel-2); }
+  .cell:focus-visible { outline: 2px solid var(--c1); outline-offset: -2px; }
+  .cell[aria-current="true"] { background: color-mix(in oklab, var(--c1) 14%, transparent); }
+  .cell[aria-current="true"]::before {
+    content: ""; position: absolute; inset: 8px auto 8px 0; width: 2px;
+    border-radius: 2px; background: var(--c1);
+  }
+  .avatar {
+    width: 30px; height: 30px; border-radius: 9px;
+    display: grid; place-items: center;
+    font: 600 12px/1 var(--mono);
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    color: var(--c3);
+  }
+  .cell[aria-current="true"] .avatar { border-color: color-mix(in oklab, var(--c1) 55%, var(--line)); color: var(--c1); }
+
+  .cell .name { font-weight: 550; font-size: 13.5px; }
+  .cell .sub { font: 400 11px/1.3 var(--mono); color: var(--ink-3); }
+
+  /* weight bar: the beehive, visible */
+  .weight { display: flex; gap: 2px; align-items: flex-end; height: 14px; }
+  .weight i { width: 3px; border-radius: 1px; background: var(--line); }
+  .weight i.on { background: var(--c6); }
+  .weight i.warm { background: var(--c2); }
+
+  .tag {
+    font: 600 9.5px/1 var(--mono);
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    padding: 4px 6px;
+    border-radius: 5px;
+    white-space: nowrap;
+  }
+  .tag.claimed { color: var(--c2); border: 1px solid color-mix(in oklab, var(--c2) 45%, transparent); background: color-mix(in oklab, var(--c2) 10%, transparent); }
+  .tag.attested { color: var(--c6); border: 1px solid color-mix(in oklab, var(--c6) 40%, transparent); background: color-mix(in oklab, var(--c6) 9%, transparent); }
+
+  /* ── thread ────────────────────────────────────────────── */
+  .thread { grid-area: thread; display: flex; flex-direction: column; min-width: 0; }
+
+  .thread-head {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 22px;
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, #0E0B19 0%, var(--bg) 100%);
+  }
+  .thread-head h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
+  .thread-head .meta { font: 400 11.5px/1 var(--mono); color: var(--ink-3); }
+  .ladder { margin-left: auto; display: flex; gap: 6px; }
+  .rung {
+    display: inline-flex; align-items: center; gap: 5px;
+    font: 600 10px/1 var(--mono);
+    letter-spacing: .06em;
+    color: var(--ink-3);
+    padding: 5px 8px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+  }
+  .rung.ok { color: var(--c6); border-color: color-mix(in oklab, var(--c6) 35%, transparent); }
+  .rung.hold { color: var(--c2); border-color: color-mix(in oklab, var(--c2) 35%, transparent); }
+  .rung.off { opacity: .45; }
+
+  .messages { flex: 1; overflow-y: auto; padding: 22px; display: flex; flex-direction: column; gap: 18px; }
+
+  .msg { max-width: 62ch; }
+  .msg .who { display: flex; align-items: baseline; gap: 8px; margin-bottom: 5px; }
+  .msg .who b { font-weight: 600; font-size: 12.5px; }
+  .msg .who time { font: 400 10.5px/1 var(--mono); color: var(--ink-3); }
+  .bubble {
+    padding: 11px 14px;
+    border-radius: 4px 12px 12px 12px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    color: #E4DEF2;
+  }
+  .msg.mine { align-self: flex-end; }
+  .msg.mine .who { justify-content: flex-end; }
+  .msg.mine .bubble {
+    background: color-mix(in oklab, var(--c1) 13%, var(--panel));
+    border-color: color-mix(in oklab, var(--c1) 32%, transparent);
+    border-radius: 12px 4px 12px 12px;
+  }
+  .certs {
+    display: flex; gap: 10px; align-items: center;
+    margin-top: 6px;
+    font: 400 10.5px/1 var(--mono);
+    color: var(--ink-3);
+  }
+  .certs .ok { color: var(--c6); }
+  .certs .hold { color: var(--c2); }
+
+  .event {
+    align-self: center;
+    font: 500 11px/1.4 var(--mono);
+    color: var(--ink-3);
+    padding: 6px 12px;
+    border: 1px dashed var(--line);
+    border-radius: 999px;
+    background: #0B0914;
+  }
+  .event b { color: var(--c3); font-weight: 600; }
+
+  .composer { border-top: 1px solid var(--line); padding: 14px 22px 18px; background: var(--panel); }
+  .composer .bar {
+    display: flex; align-items: center; gap: 10px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--panel-2);
+    padding: 10px 12px;
+    transition: border-color .15s ease;
+  }
+  .composer .bar:focus-within { border-color: color-mix(in oklab, var(--c1) 60%, var(--line)); }
+  .composer input {
+    flex: 1; min-width: 0;
+    border: 0; background: transparent; color: var(--ink);
+    font: 400 14px/1.4 var(--sans);
+    outline: none;
+  }
+  .composer input::placeholder { color: var(--ink-3); }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font: 600 10.5px/1 var(--mono);
+    letter-spacing: .05em;
+    padding: 7px 9px;
+    border-radius: 7px;
+    border: 1px solid var(--line);
+    color: var(--ink-2);
+    background: #0B0914;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .chip:hover, .chip:focus-visible { border-color: var(--c3); color: var(--c3); outline: none; }
+  .chip.send { border-color: color-mix(in oklab, var(--c1) 50%, transparent); color: var(--c1); background: color-mix(in oklab, var(--c1) 12%, transparent); }
+  .composer .hint { margin-top: 8px; font: 400 10.5px/1.5 var(--mono); color: var(--ink-3); }
+
+  /* ── inspector ─────────────────────────────────────────── */
+  .inspect {
+    grid-area: inspect;
+    border-left: 1px solid var(--line);
+    background: var(--panel);
+    overflow-y: auto;
+    padding: 16px;
+    display: flex; flex-direction: column; gap: 16px;
+  }
+  .card { border: 1px solid var(--line); border-radius: var(--r); background: var(--panel-2); padding: 14px; }
+  .card h3 {
+    margin: 0 0 10px;
+    font: 600 10px/1 var(--mono);
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .kv { display: grid; grid-template-columns: 84px 1fr; gap: 6px 10px; font: 400 11.5px/1.6 var(--mono); }
+  .kv dt { color: var(--ink-3); }
+  .kv dd { margin: 0; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .kv dd.ok { color: var(--c6); }
+  .kv dd.hold { color: var(--c2); }
+
+  .gate { margin-top: 4px; }
+  .gate .row { display: flex; justify-content: space-between; font: 500 11px/1.4 var(--mono); color: var(--ink-2); margin-bottom: 6px; }
+  .gate .bar { height: 6px; border-radius: 999px; background: #0B0914; border: 1px solid var(--line); overflow: hidden; }
+  .gate .bar i { display: block; height: 100%; width: 62%; background: linear-gradient(90deg, var(--c2), var(--c6)); }
+  .gate p { margin: 8px 0 0; font: 400 10.5px/1.5 var(--mono); color: var(--ink-3); }
+
+  /* ── command palette ───────────────────────────────────── */
+  .scrim {
+    position: fixed; inset: 0;
+    background: color-mix(in oklab, #000 62%, transparent);
+    backdrop-filter: blur(3px);
+    display: none; place-items: start center;
+    padding-top: 13vh;
+    z-index: 20;
+  }
+  .scrim[data-open="true"] { display: grid; }
+  .palette {
+    width: min(620px, 92vw);
+    border: 1px solid color-mix(in oklab, var(--c1) 30%, var(--line));
+    border-radius: 14px;
+    background: #120E20;
+    box-shadow: 0 30px 90px rgba(0,0,0,.65), 0 0 0 1px rgba(255,106,193,.06);
+    overflow: hidden;
+  }
+  .palette .in { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .palette .in input { flex: 1; border: 0; background: transparent; color: var(--ink); font: 400 15px/1 var(--sans); outline: none; }
+  .palette .in span { font: 500 10px/1 var(--mono); color: var(--ink-3); letter-spacing: .1em; }
+  .palette ul { list-style: none; margin: 0; padding: 6px; max-height: 46vh; overflow-y: auto; }
+  .palette li {
+    display: grid; grid-template-columns: 22px 1fr auto;
+    align-items: center; gap: 10px;
+    padding: 10px 12px; border-radius: 9px;
+    font-size: 13.5px; color: var(--ink-2); cursor: pointer;
+  }
+  .palette li .ic { color: var(--c3); font: 600 12px/1 var(--mono); text-align: center; }
+  .palette li kbd { font: 500 10px/1 var(--mono); color: var(--ink-3); }
+  .palette li[data-sel="true"] { background: color-mix(in oklab, var(--c1) 15%, transparent); color: var(--ink); }
+  .palette footer { display: flex; gap: 14px; padding: 9px 14px; border-top: 1px solid var(--line); font: 400 10px/1 var(--mono); color: var(--ink-3); }
+
+  /* ── footer legend ─────────────────────────────────────── */
+  .foot {
+    grid-area: foot;
+    display: flex; align-items: center; gap: 18px;
+    padding: 0 16px;
+    border-top: 1px solid var(--line);
+    background: #0B0914;
+    font: 400 10.5px/1 var(--mono);
+    color: var(--ink-3);
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .foot .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 5px; vertical-align: -1px; }
+  .d-pos { background: var(--c6); }
+  .d-zero { background: var(--c2); }
+  .d-neg { background: var(--prune); }
+  .foot .right { margin-left: auto; color: var(--ink-3); }
+
+  /* motion: signal only */
+  @media (prefers-reduced-motion: no-preference) {
+    ::view-transition-old(root), ::view-transition-new(root) { animation-duration: .18s; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="studio-container">
+<div class="app">
+
+  <!-- ── top ── -->
+  <header class="top">
+    <div class="mark">
+      <svg viewBox="0 0 40 40" aria-hidden="true">
+        <circle cx="20" cy="20" r="17" fill="none" stroke="#00E5C9" stroke-opacity=".35" stroke-width="1.4" stroke-dasharray="72 36" stroke-linecap="round" transform="rotate(-28 20 20)"/>
+        <path d="M20 4.5 23.4 15.2 34 18.6 23.4 22 20 32.7 16.6 22 6 18.6 16.6 15.2Z" fill="#FF6AC1"/>
+        <circle cx="20" cy="18.6" r="2.2" fill="#FFD700"/>
+      </svg>
+      <div><b>Arnauth</b><br><span>talk as an email or a name · no number</span></div>
+    </div>
+
+    <button class="cmd" onclick="openPalette()" aria-label="Open command palette">
+      <span>Search identities, cells, actions…</span><kbd>⌘K</kbd>
+    </button>
+
+    <div class="wallet" title="VAKED Coin (FOKEN) · zeno ledger · gate only, not a tips jar">
+      <i></i> 1,240 FOKEN
+    </div>
+  </header>
+
+  <!-- ── rail ── -->
+  <nav class="rail" aria-label="Cells and direct messages">
+    <h2>cells</h2>
+
+    <div class="cell" aria-current="true" tabindex="0">
+      <div class="avatar">◍</div>
+      <div><div class="name">saturn.ring</div><div class="sub">4 members · sender-key</div></div>
+      <div class="weight" aria-label="beehive weight 7">
+        <i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="warm"></i>
+      </div>
+    </div>
+
+    <div class="cell" tabindex="0">
+      <div class="avatar">✳</div>
+      <div><div class="name">kintsugi.hearth</div><div class="sub">12 members · attested</div></div>
+      <div class="weight"><i class="on"></i><i class="on"></i><i class="warm"></i><i></i><i></i></div>
+    </div>
+
+    <h2>direct</h2>
+
+    <div class="cell" tabindex="0">
+      <div class="avatar">al</div>
+      <div><div class="name">alice.eth</div><div class="sub">hybrid · heard 42</div></div>
+      <span class="tag attested">attested</span>
+    </div>
+
+    <div class="cell" tabindex="0">
+      <div class="avatar">ka</div>
+      <div><div class="name">kai.eth</div><div class="sub">heard 6</div></div>
+      <span class="tag attested">attested</span>
+    </div>
+
+    <div class="cell" tabindex="0">
+      <div class="avatar">no</div>
+      <div><div class="name">nova.eth</div><div class="sub">key proven · name unproven</div></div>
+      <span class="tag claimed">claimed</span>
+    </div>
+
+    <h2>bots</h2>
+    <div class="cell" tabindex="0">
+      <div class="avatar">⚙</div>
+      <div><div class="name">kintsugi.bot</div><div class="sub">era-3 · 1.2k installs</div></div>
+      <span class="tag claimed">claimed</span>
+    </div>
+  </nav>
+
+  <!-- ── thread ── -->
+  <main class="thread">
+    <div class="thread-head">
+      <div>
+        <h1>saturn.ring</h1>
+        <div class="meta">one body · encrypted once · 3 recipients</div>
+      </div>
+      <div class="ladder" aria-label="trust ladder">
+        <span class="rung ok">seal ✓</span>
+        <span class="rung ok">ed25519 ✓</span>
+        <span class="rung ok">ml-dsa-65 ✓</span>
+        <span class="rung ok">ml-kem-768 ✓</span>
+      </div>
+    </div>
+
+    <div class="messages">
+      <div class="event">joined cell <b>saturn.ring</b> — key handed over by alice.eth</div>
+
+      <article class="msg">
+        <div class="who"><b>alice.eth</b><time>14:02</time></div>
+        <div class="bubble">one body, one key for the whole cell. forty members would cost forty signatures and a single encryption.</div>
+        <div class="certs"><span class="ok">✓ hybrid</span><span>0x a62… f09</span><span>1184 B ek</span></div>
+      </article>
+
+      <article class="msg">
+        <div class="who"><b>kai.eth</b><time>14:02</time></div>
+        <div class="bubble">and when someone leaves, the key does not follow them — for everything after.</div>
+        <div class="certs"><span class="hold">⚠ no rekey yet</span><span>past messages stay readable</span></div>
+      </article>
+
+      <article class="msg mine">
+        <div class="who"><time>14:03</time><b>you@mail.com</b></div>
+        <div class="bubble">then let's ship rekey before the cell outgrows the group.</div>
+        <div class="certs"><span class="ok">✓ hybrid</span><span>0x b41… 7d2</span><span>sealed</span></div>
+      </article>
+    </div>
+
+    <div class="composer">
+      <div class="bar">
+        <input placeholder="Message saturn.ring — encrypted once, queued for every member" aria-label="Compose message">
+        <button class="chip" title="Attach a sticker pack — ERC-1155, works offline">◈ sticker</button>
+        <button class="chip" title="Install a bot into this cell">⚙ bot</button>
+        <button class="chip send" title="Seal with the cell key, wrap per member">Seal ↵</button>
+      </div>
+      <div class="hint">ephemeral X25519 + ML-KEM-768 → HKDF → ChaCha20-Poly1305 · signed Ed25519 + ML-DSA-65 · nothing leaves this device unsealed</div>
+    </div>
+  </main>
+
+  <!-- ── inspector ── -->
+  <aside class="inspect" aria-label="Inspector">
+    <section class="card">
+      <h3>sender identity</h3>
+      <dl class="kv">
+        <dt>label</dt><dd>you@mail.com</dd>
+        <dt>kind</dt><dd>email</dd>
+        <dt>subject</dt><dd>7e3b…d692</dd>
+        <dt>seal</dt><dd class="ok">verified</dd>
+        <dt>ed25519</dt><dd>3690…b829</dd>
+        <dt>ml-dsa-65</dt><dd class="ok">1952 B</dd>
+        <dt>claimed?</dt><dd class="ok">no — attested</dd>
+      </dl>
+    </section>
+
+    <section class="card">
+      <h3>cell</h3>
+      <dl class="kv">
+        <dt>id</dt><dd>e487…28bd</dd>
+        <dt>members</dt><dd>4</dd>
+        <dt>key</dt><dd>32 B · local only</dd>
+        <dt>receipt</dt><dd>269/54</dd>
+        <dt>weight</dt><dd>7 · 30d half-life</dd>
+      </dl>
+      <div class="gate">
+        <div class="row"><span>FOKEN gate</span><span>1,240 / 2,000</span></div>
+        <div class="bar"><i></i></div>
+        <p>proof-of-contribution, not a tips jar. gates bot installs and extra cells.</p>
+      </div>
+    </section>
+
+    <section class="card">
+      <h3>web3</h3>
+      <dl class="kv">
+        <dt>registry</dt><dd class="hold">not deployed</dd>
+        <dt>ens</dt><dd class="hold">not issued</dd>
+        <dt>account</dt><dd class="hold">erc-4337 · planned</dd>
+        <dt>on-chain</dt><dd>none</dd>
+      </dl>
+      <p style="margin:10px 0 0;font:400 10.5px/1.6 var(--mono);color:var(--ink-3)">
+        messages are hybrid post-quantum. settlement is as quantum-safe as Ethereum is — today, that is not.
+      </p>
+    </section>
+  </aside>
+
+  <!-- ── footer ── -->
+  <footer class="foot">
+    <span><i class="dot d-pos"></i>+1 witnessed</span>
+    <span><i class="dot d-zero"></i>0 hold / claimed</span>
+    <span><i class="dot d-neg"></i>−1 pruned</span>
+    <span>beehive: learn · share · forget</span>
+    <span class="right">from love, from within · Peter &amp; Nate → Mom (*) &amp; Dad (△)</span>
+  </footer>
+</div>
+</div>
+
+<!-- ── command palette ── -->
+<div class="scrim" id="scrim" onclick="if(event.target===this)closePalette()">
+  <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette">
+    <div class="in">
+      <span>⌘K</span>
+      <input id="pq" placeholder="Jump to a cell, an identity, or an action…" autocomplete="off">
+      <span>esc</span>
+    </div>
+    <ul>
+      <li data-sel="true"><span class="ic">◍</span><span>saturn.ring</span><kbd>cell</kbd></li>
+      <li><span class="ic">✳</span><span>kintsugi.hearth</span><kbd>cell</kbd></li>
+      <li><span class="ic">→</span><span>Message alice.eth</span><kbd>dm</kbd></li>
+      <li><span class="ic">✚</span><span>Mint identity…</span><kbd>new</kbd></li>
+      <li><span class="ic">◈</span><span>Sticker packs</span><kbd>shop</kbd></li>
+      <li><span class="ic">⚙</span><span>Install a bot into a cell</span><kbd>bots</kbd></li>
+      <li><span class="ic">⌫</span><span>Forget (halve weights now)</span><kbd>swarm</kbd></li>
+      <li><span class="ic">⎙</span><span>Copy hive receipt</span><kbd>seal</kbd></li>
+    </ul>
+    <footer><span>↑↓ move</span><span>↵ run</span><span>⌘K toggle</span><span>nothing here is a server call</span></footer>
+  </div>
+</div>
+
+<script>
+  const scrim = document.getElementById('scrim');
+  const pq = document.getElementById('pq');
+
+  function paint(open) {
+    const apply = () => {
+      scrim.dataset.open = open ? 'true' : 'false';
+      if (open) pq.focus(); else pq.blur();
+    };
+    if (document.startViewTransition && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      document.startViewTransition(apply);
+    } else { apply(); }
+  }
+  function openPalette() { paint(true); }
+  function closePalette() { paint(false); }
+
+  addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      paint(scrim.dataset.open !== 'true');
+    }
+    if (e.key === 'Escape') closePalette();
+  });
+
+  // arrow keys move the selection, because a palette you cannot drive by keyboard is a menu
+  pq.addEventListener('keydown', (e) => {
+    const items = [...scrim.querySelectorAll('li')];
+    const i = items.findIndex((el) => el.dataset.sel === 'true');
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const next = (i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length;
+      items.forEach((el) => delete el.dataset.sel);
+      items[next].dataset.sel = 'true';
+      items[next].scrollIntoView({ block: 'nearest' });
+    }
+    if (e.key === 'Enter') closePalette();
+  });
+
+  scrim.querySelectorAll('li').forEach((li) => {
+    li.addEventListener('mouseenter', () => {
+      scrim.querySelectorAll('li').forEach((el) => delete el.dataset.sel);
+      li.dataset.sel = 'true';
+    });
+    li.addEventListener('click', closePalette);
+  });
+</script>
+</body>
+</html>
