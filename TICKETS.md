@@ -30,6 +30,7 @@ or it is not.
 | 22 | On PATH + wired into Crush | symlinks in `~/.local/bin`, `mcp.arnauth` in `~/.config/crush/crush.json` (backup kept) | `arnauth --version`, `jq .mcp` shows `arnauth` |
 | 23 | In the vaked constellation | `zeno.vaked.dev/constellation.json` entry `arnauth` (19 projects) | JSON validates, commit `63309d3` pushed |
 | 24 | ELI5 README + landing page | `README.md` rewritten plain-first, `brand/index.html` | HTML tag balance checked; marketplace claims marked unverified |
+| 25 | Verified Ethereum monetization inventory | `docs/monetization-oss.md` | 15 repos checked live via `gh repo view` on 2026-10-30 (stars/licence/last-push), incl. x402 at 6,773★ |
 
 ## Deliberately not ticketed (out of scope for v1)
 

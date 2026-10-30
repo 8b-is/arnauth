@@ -344,13 +344,16 @@
       </div>
     </div>
     <p class="note" style="margin-top:22px">
-      <b>Verification status.</b> Every distribution surface and take rate on this
-      page is a candidate, not a claim: I could not reach a search API while
-      writing it. Before any integration or spend, check the live docs for
-      Farcaster mini apps, Base ecosystem listings, the ENS app directory,
-      MetaMask Snaps, DappRadar, Zora, and OpenSea. What <em>is</em> verified is
-      local: <code>zeno-engine.js</code> settles VAKED/FOKEN at ¥100 per coin, and
-      FOKEN is a proof-of-contribution gate, not a tips jar.
+      <b>Verification status, updated.</b> This section first shipped marked
+      "unverified" because no search API was reachable. It has since been checked
+      against the GitHub API on 2026-10-30: <code>x402-foundation/x402</code>
+      (6,773★, Apache-2.0, pushed 2026-10-29) is the live primitive for per-call
+      payments, with a Rust binding at <code>x402-rs</code> (293★);
+      <code>unlock-protocol/unlock</code> (884★) and
+      <code>superfluid</code> (904★) cover subscriptions; OpenZeppelin (27,329★)
+      is what you build ERC-1155 stickers on. Take rates and listing requirements
+      are still product decisions that live outside any repo — verify those
+      before spending.
     </p>
   </div>
 </section>

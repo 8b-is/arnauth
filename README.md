@@ -225,5 +225,7 @@ cargo fmt --all --check
 - `docs/web3-design.md` — interface, chain architecture, monetization
 - `brand/index.html` — landing page
 - `brand/ui-mock.html` — interface mock
+- `docs/monetization-oss.md` — verified OSS inventory for Ethereum monetization
+  (stars, licences, last-push dates checked on the day)
 
 AGPL-3.0-only, matching `wupz-core`, which this crate links.
