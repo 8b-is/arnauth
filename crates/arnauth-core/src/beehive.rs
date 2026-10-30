@@ -220,8 +220,42 @@ impl Beehive {
     }
 
     /// **Learn, unverified.** A peer seen only on the wire: the signature proves
-    /// they hold the key, not that they own the name on it.
+    /// they hold the key, not that they own the name on it. Never overwrites an
+    /// attested peer's card, and refuses a claimed card whose keys conflict with
+    /// an attested peer.
     pub fn learn_claimed(&mut self, card: ContactCard, now: u64) -> Result<Learned> {
+        if let Some(peer) = self
+            .peers
+            .iter_mut()
+            .find(|peer| peer.card.label == card.label)
+        {
+            if !peer.claimed {
+                if peer.card.verifying_key != card.verifying_key {
+                    return Err(Error::BadSignature);
+                }
+                if let (Some(attested_pq), Some(claimed_pq)) = (&peer.card.pq, &card.pq) {
+                    if attested_pq.mldsa_vk != claimed_pq.mldsa_vk {
+                        return Err(Error::BadSignature);
+                    }
+                }
+                peer.weight = peer.weight.saturating_add(1);
+                peer.last_seen_ms = now;
+                return Ok(Learned::Refreshed);
+            }
+            let replaced = peer.card.verifying_key != card.verifying_key
+                || peer.card.pq.as_ref().map(|p| &p.mldsa_vk)
+                    != card.pq.as_ref().map(|p| &p.mldsa_vk);
+            peer.card = card;
+            peer.claimed = true;
+            peer.weight = peer.weight.saturating_add(1);
+            peer.last_seen_ms = now;
+            return Ok(if replaced {
+                Learned::Replaced
+            } else {
+                Learned::Refreshed
+            });
+        }
+
         let outcome = self.learn(card, now)?;
         if outcome == Learned::New {
             if let Some(peer) = self.peers.last_mut() {
@@ -577,6 +611,31 @@ mod tests {
         let delta = hive.share(5).unwrap();
         let labels: Vec<&str> = delta.cards.iter().map(|c| c.label.as_str()).collect();
         assert_eq!(labels, vec!["trusted.eth"]);
+    }
+
+    #[test]
+    fn learn_claimed_never_overwrites_attested_peer_and_detects_key_changes() {
+        let mut hive = hive();
+        let trusted = card("trusted.eth");
+        hive.learn(trusted.clone(), 0).unwrap();
+
+        // Impostor claiming "trusted.eth" with a different verifying key is refused.
+        let impostor = card("trusted.eth");
+        assert!(matches!(
+            hive.learn_claimed(impostor, 1),
+            Err(Error::BadSignature)
+        ));
+        assert_eq!(hive.peer_by_label("trusted.eth").unwrap().card, trusted);
+
+        // Claimed peer key rotation is detected and stays marked claimed.
+        let first_claim = card("stranger.eth");
+        assert_eq!(hive.learn_claimed(first_claim, 1).unwrap(), Learned::New);
+        let rotated_claim = card("stranger.eth");
+        assert_eq!(
+            hive.learn_claimed(rotated_claim, 2).unwrap(),
+            Learned::Replaced
+        );
+        assert!(hive.peer_by_label("stranger.eth").unwrap().claimed);
     }
 
     #[test]

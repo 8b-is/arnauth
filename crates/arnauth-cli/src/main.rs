@@ -527,6 +527,7 @@ fn run(cli: Cli) -> Result<()> {
             }
 
             let save_dir = save.unwrap_or_else(|| home.root().join("downloads"));
+            let contacts = Contacts::load(&home)?;
             let mut hive = Beehive::load(&home)?;
             let mut opened = 0usize;
             let mut joined = 0usize;
@@ -536,6 +537,12 @@ fn run(cli: Cli) -> Result<()> {
                 Default::default();
 
             for envelope in &envelopes {
+                if let Some(attested) = contacts.get(&envelope.from_label) {
+                    if let Err(e) = envelope.verify_sender_card(attested) {
+                        eprintln!("rejected envelope from {}: {e}", envelope.from_label);
+                        continue;
+                    }
+                }
                 let message = match envelope.open_any(&keys, our_pq.as_ref()) {
                     Ok(message) => message,
                     Err(e) => {
@@ -553,9 +560,22 @@ fn run(cli: Cli) -> Result<()> {
                     }
                 };
 
-                let sender = claimed_card(&message);
+                let sender = claimed_card(envelope, &message);
                 if sender.label != identity.label {
-                    hive.learn_claimed(sender.clone(), now_ms())?;
+                    match hive.learn_claimed(sender.clone(), now_ms()) {
+                        Ok(Learned::Replaced) => {
+                            eprintln!("notice: claimed peer {} changed keys", sender.label);
+                            events.push(Event {
+                                kind: "peer.key_changed".into(),
+                                payload: serde_json::json!({ "from": sender.label }),
+                            });
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            eprintln!("rejected sender key mismatch for {}: {e}", sender.label);
+                            continue;
+                        }
+                    }
                     hive.touch(&sender.subject, false, now_ms());
                 }
 
@@ -1100,20 +1120,28 @@ fn run_group(home: &Home, command: GroupCommand) -> Result<()> {
 
 /// Reconstruct the sender's card from an envelope. The key is proven by the
 /// signature; the label is only claimed, so it is learned as `claimed`.
-fn claimed_card(message: &OpenedEnvelope) -> ContactCard {
+fn claimed_card(envelope: &Envelope, message: &OpenedEnvelope) -> ContactCard {
     let (label, kind) = parse_label(&message.from_label).unwrap_or_else(|_| {
         (
             format!("unknown-{}", hex::encode(&message.from_verifying_key[..4])),
             IdentityKind::Name,
         )
     });
+    let pq = if !envelope.mldsa_vk.is_empty() {
+        Some(arnauth_core::contacts::PqCard {
+            mldsa_vk: envelope.mldsa_vk.clone(),
+            mlkem_ek: Vec::new(),
+        })
+    } else {
+        None
+    };
     ContactCard {
         subject: subject_for(&label),
         label,
         kind,
         verifying_key: message.from_verifying_key,
-        dh_public: [0u8; 32],
-        pq: None,
+        dh_public: envelope.from_dh_public,
+        pq,
     }
 }
 

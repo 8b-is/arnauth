@@ -119,6 +119,7 @@ impl Envelope {
             to_dh_public,
             ephemeral_public,
             nonce,
+            mldsa_vk: &[],
         };
 
         let shared = ephemeral_secret.diffie_hellman(&PublicKey::from(to_dh_public));
@@ -205,6 +206,7 @@ impl Envelope {
         let mut nonce = [0u8; 12];
         OsRng.fill_bytes(&mut nonce);
 
+        let sender_mldsa_vk = pq.mldsa_vk();
         let header = Header {
             mode: EnvelopeMode::Hybrid,
             from_verifying_key: identity.verifying_key,
@@ -212,6 +214,7 @@ impl Envelope {
             to_dh_public,
             ephemeral_public,
             nonce,
+            mldsa_vk: &sender_mldsa_vk,
         };
 
         let cipher = cipher_for_mode(&encapsulation.combined_key, &header)?;
@@ -242,14 +245,14 @@ impl Envelope {
             nonce,
             ciphertext,
             signature: signature.ed25519,
-            mldsa_vk: pq.mldsa_vk(),
+            mldsa_vk: sender_mldsa_vk,
             mldsa_signature: signature.ml_dsa,
             mlkem_ct: encapsulation.ml_kem_ciphertext,
             created_ms: now_ms(),
         })
     }
 
-    fn header(&self) -> Header {
+    fn header(&self) -> Header<'_> {
         Header {
             mode: self.mode,
             from_verifying_key: self.from_verifying_key,
@@ -257,7 +260,35 @@ impl Envelope {
             to_dh_public: self.to_dh_public,
             ephemeral_public: self.ephemeral_public,
             nonce: self.nonce,
+            mldsa_vk: &self.mldsa_vk,
         }
+    }
+
+    /// Verify that this envelope's classical and post-quantum sender keys match
+    /// the peer's recorded [`ContactCard`], refusing key substitution or silent
+    /// downgrade from a hybrid-capable card.
+    pub fn verify_sender_card(&self, peer: &ContactCard) -> Result<()> {
+        if self.from_verifying_key != peer.verifying_key {
+            return Err(Error::BadSignature);
+        }
+        if peer.dh_public != [0u8; 32] && self.from_dh_public != peer.dh_public {
+            return Err(Error::BadSignature);
+        }
+        if let Some(pq_card) = &peer.pq {
+            if self.mode != EnvelopeMode::Hybrid {
+                return Err(Error::Malformed {
+                    what: "envelope",
+                    detail: format!(
+                        "{} advertises post-quantum keys; refusing classical envelope",
+                        peer.label
+                    ),
+                });
+            }
+            if self.mldsa_vk != pq_card.mldsa_vk {
+                return Err(Error::BadSignature);
+            }
+        }
+        Ok(())
     }
 
     /// Check the signature without decrypting. Cheap enough to run before any
@@ -409,20 +440,22 @@ fn verify_classical(verifying_key: &[u8; 32], signed: &[u8], signature: &[u8; 64
 }
 
 /// The cleartext header every binding is computed over.
-struct Header {
+struct Header<'a> {
     mode: EnvelopeMode,
     from_verifying_key: [u8; 32],
     from_dh_public: [u8; 32],
     to_dh_public: [u8; 32],
     ephemeral_public: [u8; 32],
     nonce: [u8; 12],
+    mldsa_vk: &'a [u8],
 }
 
-impl Header {
-    /// Classical bytes are unchanged from v1; hybrid appends a mode byte, so a
-    /// v1 envelope still verifies byte for byte.
+impl Header<'_> {
+    /// Classical bytes are unchanged from v1; hybrid appends a mode byte and the
+    /// sender's ML-DSA-65 verifying key so both signatures, HKDF info, and AEAD
+    /// AAD bind the post-quantum verifying key.
     fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(32 * 4 + 12 + 1);
+        let mut out = Vec::with_capacity(32 * 4 + 12 + 1 + 4 + self.mldsa_vk.len());
         out.extend_from_slice(&self.from_verifying_key);
         out.extend_from_slice(&self.from_dh_public);
         out.extend_from_slice(&self.to_dh_public);
@@ -430,6 +463,8 @@ impl Header {
         out.extend_from_slice(&self.nonce);
         if self.mode == EnvelopeMode::Hybrid {
             out.push(2);
+            out.extend_from_slice(&(self.mldsa_vk.len() as u32).to_le_bytes());
+            out.extend_from_slice(self.mldsa_vk);
         }
         out
     }
@@ -663,6 +698,28 @@ mod tests {
             Envelope::seal_with(&alice, &alice_keys, Some(&alice_pq), &bob_card, b"hi").unwrap();
         envelope.signature[0] ^= 0xff;
 
+        assert!(matches!(
+            envelope.open_hybrid(&bob_keys, &bob_pq),
+            Err(Error::BadSignature)
+        ));
+    }
+
+    #[test]
+    fn hybrid_binds_mldsa_vk_in_header_and_verifies_sender_card() {
+        let (alice, alice_keys, alice_pq, alice_card, _, bob_keys, bob_pq, bob_card) = pq_pair();
+        let mut envelope =
+            Envelope::seal_with(&alice, &alice_keys, Some(&alice_pq), &bob_card, b"hi").unwrap();
+
+        assert!(envelope.verify_sender_card(&alice_card).is_ok());
+
+        // Substituting a fresh ML-DSA key in the envelope fails both header binding
+        // and sender-card verification.
+        let mallory_pq = PqBundle::generate();
+        envelope.mldsa_vk = mallory_pq.mldsa_vk();
+        assert!(matches!(
+            envelope.verify_sender_card(&alice_card),
+            Err(Error::BadSignature)
+        ));
         assert!(matches!(
             envelope.open_hybrid(&bob_keys, &bob_pq),
             Err(Error::BadSignature)

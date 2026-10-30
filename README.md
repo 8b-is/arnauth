@@ -109,8 +109,8 @@ arnauth mcp
 
 | Concern | Module | What it does |
 |---|---|---|
-| Who you are | `identity` | label → normalised → subject hash; sealed with a wupz frame |
-| Tamper evidence | `seal` | row packed into balanced ternary, folded into a 32-byte `0x62` frame |
+| Who you are | `identity` | label → normalised → subject hash; sealed with a wupz integrity frame |
+| Integrity check | `seal` | row packed into balanced ternary, folded into an unkeyed 32-byte `0x62` frame |
 | Keys | `keys` | one seed, HKDF-split into Ed25519 (who) and X25519 (who can read) |
 | Messages | `envelope` | ephemeral X25519 + ML-KEM-768 → HKDF → ChaCha20-Poly1305, signed by both halves |
 | Files | `media` | 64 KiB chunks, `blob_id = sha256(domain‖len‖content)`, per-chunk hashes, resumable staging |

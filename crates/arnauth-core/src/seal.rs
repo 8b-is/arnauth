@@ -1,9 +1,10 @@
-//! The seal: a 32-byte wupz frame over an identity row.
+//! The seal: an unkeyed 32-byte wupz integrity frame over an identity row.
 //!
 //! The row is packed into balanced ternary (`{-1, 0, +1}`, five trits per byte)
 //! inside a fixed arena, then both the raw bytes and the packed bytes are folded
-//! into a `0x62`-gated frame. Changing one byte of the row changes the frame, so
-//! a hand-edited `identity.json` cannot pass verification.
+//! into a `0x62`-gated integrity frame. Changing one byte of the row changes the
+//! frame, so an corrupted or casually hand-edited `identity.json` fails the
+//! integrity check (cryptographic authenticity is carried by `key.bin` + Ed25519/ML-DSA).
 
 use wupz_core::arena::Arena;
 use wupz_core::fold::{pack_gaia_b158_into, seal_frame_32b, verify_frame_32b, GATE_0X62};
