@@ -260,6 +260,7 @@ dependencies = [
  "ed25519-dalek",
  "hex",
  "hkdf",
+ "hmac",
  "ml-dsa",
  "ml-kem",
  "rand_core 0.6.4",

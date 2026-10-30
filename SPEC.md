@@ -20,6 +20,9 @@ Supersedes nothing. Companion to `docs/web3-design.md` (which is the *why*).
 | REQ-3 | Relay: one dumb store-and-forward node, no metadata |
 | REQ-4 | CLI and GUI both speak every capability above |
 | REQ-5 | Any v1 store from before this spec keeps opening |
+| REQ-6 | Webhooks: signed JSON POST per event, never blocking message handling |
+| REQ-7 | MCP over stdio, so an agent can drive the store |
+| REQ-8 | A first run that explains itself: `arnauth quickstart` and a GUI guide |
 
 ### Out of scope (named so nobody assumes them)
 
@@ -135,6 +138,53 @@ Smoke script in `AGENTS.md`; both binaries build and the GUI launches without a
 panic against a store containing a PQ peer and a received blob.
 
 ---
+
+## 4a. REQ-6 — webhooks
+
+### Behaviour
+
+1. `Webhooks` lives at `<home>/webhooks.json`, mode 0600 (it holds secrets).
+2. `add(url, events)` accepts only `http://` with an explicit port. `https://` is
+   refused **with the reason** (no TLS stack in this crate), never a vague
+   failure.
+3. Every delivery is `POST` with `Content-Type: application/json` and
+   `X-Arnauth-Signature: hex(hmac_sha256(secret, body))` over the exact bytes.
+4. Delivery failure is logged and swallowed: a dead endpoint must not stop a
+   message from being read.
+5. Events: `message.received {from, channel, bytes}`,
+   `blob.completed {name, kind, bytes, path}`, `webhook.test`.
+
+### Acceptance
+
+`api::tests::{a_hook_receives_a_signed_post, a_dead_endpoint_is_a_logged_failure_not_a_panic,
+event_filtering_is_exact, https_is_refused_with_an_explanation, hooks_are_world_unreadable}`,
+plus an independent verifier: a Python receiver recomputed the HMAC and agreed.
+
+## 4b. REQ-7 — MCP
+
+### Behaviour
+
+1. `arnauth mcp` speaks newline-delimited JSON-RPC 2.0 on stdio.
+2. Methods: `initialize`, `ping`, `tools/list`, `tools/call`.
+3. Tools: `arnauth_whoami`, `arnauth_identities`, `arnauth_peers`,
+   `arnauth_send`, `arnauth_inbox`, `arnauth_receipt`.
+4. A tool failure is an MCP tool result with `isError: true` and a readable
+   message — never a process exit.
+5. Diagnostics go to stderr so the protocol stream stays clean.
+
+### Acceptance
+
+`mcp::tests::{initialize_advertises_tools, tools_list_names_every_tool_from_the_catalog,
+whoami_works_once_an_identity_exists, send_then_inbox_round_trips_through_mcp,
+an_unknown_tool_is_reported_as_an_error, an_unknown_method_is_a_jsonrpc_error}`,
+plus a live run: five requests piped into the binary, five valid responses.
+
+## 4c. REQ-8 — first run
+
+`arnauth quickstart [label]` mints or reuses an identity, writes
+`<home>/my-card.json`, reports seal and PQ status, and prints numbered next
+steps that only include what is actually missing. The GUI opens on a four-step
+guide when the store is empty, and every step folds away once done.
 
 ## 5. REQ-5 — compatibility
 

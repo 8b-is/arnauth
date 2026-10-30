@@ -1,8 +1,11 @@
 //! `arnauth` — the headless half. Everything the GUI does, minus the pixels.
 
+mod mcp;
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use arnauth_core::api::{Event, Webhooks};
 use arnauth_core::beehive::{Beehive, Decay, Learned, SwarmDelta};
 use arnauth_core::contacts::{ContactCard, Contacts};
 use arnauth_core::envelope::Envelope;
@@ -94,6 +97,21 @@ enum Command {
         command: RelayCommand,
     },
 
+    /// Serve MCP over stdio, so an agent can drive this store.
+    Mcp,
+
+    /// Signed JSON webhooks for systems that are not agents.
+    Webhook {
+        #[command(subcommand)]
+        command: WebhookCommand,
+    },
+
+    /// One guided pass: mint an identity, print a card, show the first steps.
+    Quickstart {
+        /// Label to mint. Defaults to asking for nothing and printing help.
+        label: Option<String>,
+    },
+
     /// Print the wupz seal frame of an identity as hex.
     Seal { label: Option<String> },
 
@@ -108,6 +126,23 @@ enum Command {
         #[command(subcommand)]
         command: GroupCommand,
     },
+}
+
+#[derive(Subcommand)]
+enum WebhookCommand {
+    /// Register an http:// endpoint. Defaults to every event.
+    Add {
+        url: String,
+        /// Event names this hook wants, e.g. --event message.received
+        #[arg(long = "event")]
+        events: Vec<String>,
+    },
+    List,
+    Remove {
+        url: String,
+    },
+    /// Send a test event to every registered hook.
+    Test,
 }
 
 #[derive(Subcommand)]
@@ -444,6 +479,7 @@ fn run(cli: Cli) -> Result<()> {
             let mut opened = 0usize;
             let mut joined = 0usize;
             let mut blobs_done = 0usize;
+            let mut events: Vec<Event> = Vec::new();
             let mut assemblers: std::collections::HashMap<[u8; 32], BlobAssembler> =
                 Default::default();
 
@@ -475,6 +511,11 @@ fn run(cli: Cli) -> Result<()> {
                     Payload::Text(text) => {
                         println!("--- from {} ({})", message.from_label, message.created_ms);
                         println!("{}", String::from_utf8_lossy(&text));
+                        events.push(Event::message_received(
+                            &message.from_label,
+                            "direct",
+                            text.len(),
+                        ));
                     }
                     Payload::KeyWrap {
                         cell_id,
@@ -571,6 +612,12 @@ fn run(cli: Cli) -> Result<()> {
                                         done.kind,
                                         target.display()
                                     );
+                                    events.push(Event::blob_completed(
+                                        &done.name,
+                                        &done.kind,
+                                        done.bytes.len(),
+                                        &target,
+                                    ));
                                 }
                             }
                             Err(e) => eprintln!("blob chunk rejected: {e}"),
@@ -589,6 +636,25 @@ fn run(cli: Cli) -> Result<()> {
             }
 
             hive.save(&home)?;
+
+            if !events.is_empty() {
+                let hooks = Webhooks::load(&home)?;
+                if !hooks.all().is_empty() {
+                    for event in &events {
+                        for delivery in hooks.deliver(event) {
+                            if delivery.ok {
+                                println!("webhook {} ← {}", delivery.url, event.kind);
+                            } else {
+                                eprintln!(
+                                    "webhook {} failed for {}: {:?}",
+                                    delivery.url, event.kind, delivery.detail
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
             if joined > 0 {
                 println!("{joined} cell key(s) installed");
             }
@@ -597,6 +663,14 @@ fn run(cli: Cli) -> Result<()> {
             }
             println!("{opened}/{} opened", envelopes.len());
         }
+
+        Command::Mcp => {
+            mcp::serve(home.clone())?;
+        }
+
+        Command::Webhook { command } => run_webhook(&home, command)?,
+
+        Command::Quickstart { label } => quickstart(&home, label)?,
 
         Command::Relay { command } => match command {
             RelayCommand::Serve { bind, cap } => {
@@ -937,4 +1011,169 @@ fn guess_mime(name: &str) -> &'static str {
         Some("zip") => "application/zip",
         _ => "application/octet-stream",
     }
+}
+
+fn run_webhook(home: &Home, command: WebhookCommand) -> Result<()> {
+    match command {
+        WebhookCommand::Add { url, events } => {
+            let mut hooks = Webhooks::load(home)?;
+            let (secret, wanted) = {
+                let hook = hooks.add(&url, events)?;
+                (hook.secret.clone(), hook.events.join(", "))
+            };
+            hooks.save()?;
+            println!("registered {url}");
+            println!("  events  {wanted}");
+            println!("  header  X-Arnauth-Signature: hmac-sha256(body, secret)");
+            println!("  secret  {secret}");
+            println!("  only http:// is supported — this crate has no TLS stack");
+        }
+
+        WebhookCommand::List => {
+            let hooks = Webhooks::load(home)?;
+            if hooks.all().is_empty() {
+                println!("no webhooks — `arnauth webhook add http://127.0.0.1:9000/hook`");
+                return Ok(());
+            }
+            for hook in hooks.all() {
+                println!("{:<40} {}", hook.url, hook.events.join(","));
+            }
+        }
+
+        WebhookCommand::Remove { url } => {
+            let mut hooks = Webhooks::load(home)?;
+            if hooks.remove(&url) {
+                hooks.save()?;
+                println!("removed {url}");
+            } else {
+                println!("no hook registered at {url}");
+            }
+        }
+
+        WebhookCommand::Test => {
+            let hooks = Webhooks::load(home)?;
+            if hooks.all().is_empty() {
+                println!("no webhooks to test");
+                return Ok(());
+            }
+            let event = Event {
+                kind: "webhook.test".into(),
+                payload: serde_json::json!({ "note": "hello from `arnauth webhook test`" }),
+            };
+            let mut failures = 0usize;
+            for delivery in hooks.deliver(&event) {
+                if delivery.ok {
+                    println!("ok    {}", delivery.url);
+                } else {
+                    failures += 1;
+                    println!("fail  {} ({:?})", delivery.url, delivery.detail);
+                }
+            }
+            if failures > 0 {
+                eprintln!("{failures} endpoint(s) failed");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn quickstart(home: &Home, label: Option<String>) -> Result<()> {
+    println!("arnauth quickstart");
+    println!("==================");
+    println!();
+
+    let label = match label {
+        Some(label) => label,
+        None => {
+            let existing = home.active_label()?;
+            match existing {
+                Some(label) => {
+                    println!("Using your active identity: {label}");
+                    println!("(pass a label to mint a new one: arnauth quickstart kai.eth)");
+                    label
+                }
+                None => {
+                    println!("No identity yet. Mint one with either shape:");
+                    println!("  arnauth init you@mail.com     an email you already own");
+                    println!("  arnauth init kai.eth          a name you mint");
+                    println!();
+                    println!("Nothing asks for a phone number, and nothing will.");
+                    return Ok(());
+                }
+            }
+        }
+    };
+
+    if !home.exists(&label) {
+        let (identity, _) = home.create(&label)?;
+        home.set_active(&identity.label)?;
+        println!("✓ minted {} ({})", identity.label, identity.kind);
+    } else {
+        println!("✓ {} already exists", label.trim().to_ascii_lowercase());
+    }
+
+    let (identity, _) = home.load(&label)?;
+    let card = home.card(&identity.label)?;
+    let card_path = home.root().join("my-card.json");
+    std::fs::write(&card_path, format!("{}\n", card.to_json()?)).map_err(|e| Error::Io {
+        path: card_path.clone(),
+        source: e,
+    })?;
+
+    println!("✓ seal verified: {}", identity.verify());
+    println!(
+        "✓ post-quantum keys: {}",
+        if card.is_hybrid_capable() {
+            "ml-dsa-65 + ml-kem-768"
+        } else {
+            "none (classical only)"
+        }
+    );
+    println!("✓ your card: {}", card_path.display());
+    println!();
+
+    let hooks = Webhooks::load(home)?;
+    let peers = Beehive::load(home)?.peers.len();
+    let cells = Beehive::load(home)?.cells.len();
+
+    println!("next steps");
+    println!("----------");
+    let mut step = 1;
+    println!(
+        "{step}. Share that card file. The other side runs:  arnauth trust {}",
+        card_path.display()
+    );
+    step += 1;
+    println!("{step}. Send the first message:                    arnauth send kai.eth \"hello\"");
+    step += 1;
+    println!(
+        "{step}. Attach a file:                            arnauth send kai.eth --file photo.jpg"
+    );
+    step += 1;
+    println!(
+        "{step}. Read what arrived:                        arnauth inbox --take --save ~/Downloads"
+    );
+    step += 1;
+    if peers == 0 {
+        println!("{step}. Nothing in the hive yet — it fills as you talk to people");
+        step += 1;
+    }
+    if cells == 0 {
+        println!("{step}. Start a group:                            arnauth group new saturn.ring");
+        step += 1;
+    }
+    if hooks.all().is_empty() {
+        println!("{step}. Wire a webhook:                           arnauth webhook add http://127.0.0.1:9000/hook");
+        step += 1;
+    }
+    println!("{step}. Let an agent drive it:                    arnauth mcp");
+
+    let store = home.root().to_path_buf();
+    println!();
+    println!("store: {}", store.display());
+    println!(
+        "gui:   arnauth-desktop   (ARNAUTH_HOME={} if it is not the default)",
+        store.display()
+    );
+    Ok(())
 }

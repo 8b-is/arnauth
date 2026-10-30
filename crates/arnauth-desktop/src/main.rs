@@ -4,6 +4,7 @@
 //! sealed by the core, and the spool is the only transport. Nothing here invents
 //! a rail that does not exist.
 
+use arnauth_core::api::{Event, Webhooks};
 use arnauth_core::beehive::{Beehive, Decay};
 use arnauth_core::contacts::{ContactCard, Contacts};
 use arnauth_core::envelope::Envelope;
@@ -35,6 +36,7 @@ fn main() -> eframe::Result<()> {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Pane {
+    Welcome,
     Identity,
     Compose,
     Inbox,
@@ -61,6 +63,8 @@ struct App {
 
     inbox: Vec<InboxRow>,
     log: Vec<String>,
+    show_help: bool,
+    themed: bool,
 }
 
 struct InboxRow {
@@ -89,12 +93,17 @@ impl App {
             assemblers: Default::default(),
             inbox: Vec::new(),
             log: Vec::new(),
+            show_help: false,
+            themed: false,
         };
 
         match Home::discover() {
             Ok(home) => {
                 app.home = Some(home);
                 app.refresh();
+                if app.identities.is_empty() {
+                    app.pane = Pane::Welcome;
+                }
             }
             Err(e) => app.startup_error = Some(e.to_string()),
         }
@@ -138,6 +147,7 @@ impl App {
 
         let mut hive = Beehive::load(&home).unwrap_or_default();
         let mut changed = false;
+        let mut events: Vec<Event> = Vec::new();
 
         for envelope in envelopes {
             let message = match envelope.open_any(&keys, our_pq.as_ref()) {
@@ -218,12 +228,19 @@ impl App {
                         Err(e) => self.note(format!("blob chunk rejected: {e}")),
                     }
                 }
-                Payload::Text(text) => self.inbox.push(InboxRow {
-                    channel: "direct".into(),
-                    from: message.from_label.clone(),
-                    body: String::from_utf8_lossy(&text).into_owned(),
-                    created_ms: message.created_ms,
-                }),
+                Payload::Text(text) => {
+                    events.push(Event::message_received(
+                        &message.from_label,
+                        "direct",
+                        text.len(),
+                    ));
+                    self.inbox.push(InboxRow {
+                        channel: "direct".into(),
+                        from: message.from_label.clone(),
+                        body: String::from_utf8_lossy(&text).into_owned(),
+                        created_ms: message.created_ms,
+                    })
+                }
                 Payload::KeyWrap {
                     cell_id,
                     cell_key,
@@ -276,6 +293,23 @@ impl App {
 
         if changed {
             let _ = hive.save(&home);
+        }
+
+        if !events.is_empty() {
+            if let Ok(hooks) = Webhooks::load(&home) {
+                if !hooks.all().is_empty() {
+                    for event in &events {
+                        for delivery in hooks.deliver(event) {
+                            if !delivery.ok {
+                                self.note(format!(
+                                    "webhook {} failed: {:?}",
+                                    delivery.url, delivery.detail
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -512,11 +546,23 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if !self.themed {
+            apply_theme(ctx);
+            self.themed = true;
+        }
+
         egui::TopBottomPanel::top("header").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("Arnauth");
                 ui.label("talk as an email or a name — no number");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .button("?")
+                        .on_hover_text("keyboard shortcuts and what the colours mean")
+                        .clicked()
+                    {
+                        self.show_help = !self.show_help;
+                    }
                     if let Some(active) = self.active.clone() {
                         ui.monospace(active);
                     } else {
@@ -589,6 +635,7 @@ impl eframe::App for App {
             }
 
             ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.pane, Pane::Welcome, "start");
                 ui.selectable_value(&mut self.pane, Pane::Identity, "identity");
                 ui.selectable_value(&mut self.pane, Pane::Compose, "compose");
                 ui.selectable_value(&mut self.pane, Pane::Inbox, "inbox");
@@ -598,6 +645,7 @@ impl eframe::App for App {
             ui.separator();
 
             match self.pane {
+                Pane::Welcome => self.welcome_pane(ui),
                 Pane::Identity => self.identity_pane(ui),
                 Pane::Compose => self.compose_pane(ui),
                 Pane::Inbox => self.inbox_pane(ui),
@@ -605,13 +653,83 @@ impl eframe::App for App {
                 Pane::Contacts => self.contacts_pane(ui),
             }
         });
+
+        if self.show_help {
+            let mut open = true;
+            egui::Window::new("arnauth — help")
+                .open(&mut open)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.heading("what the colours mean");
+                    ui.colored_label(egui::Color32::from_rgb(0x00, 0xFF, 0x66), "+1 witnessed");
+                    ui.colored_label(egui::Color32::from_rgb(0xFF, 0xD7, 0x00), "0 hold / claimed");
+                    ui.colored_label(egui::Color32::from_rgb(0xFF, 0x33, 0x66), "−1 pruned / mismatch");
+                    ui.separator();
+                    ui.heading("trust ladder");
+                    ui.label("claimed  — key proven by a signature, name not");
+                    ui.label("attested — you imported their card out of band");
+                    ui.label("sealed   — the identity row passes its wupz frame");
+                    ui.label("hybrid   — both Ed25519 and ML-DSA-65 verified");
+                    ui.separator();
+                    ui.heading("store");
+                    let root = self
+                        .home
+                        .as_ref()
+                        .map(|home| home.root().display().to_string())
+                        .unwrap_or_else(|| "—".into());
+                    ui.monospace(root);
+                    ui.label("ARNAUTH_HOME relocates it. key.bin is the identity: lose it, lose the identity.");
+                });
+            if !open {
+                self.show_help = false;
+            }
+        }
     }
+}
+
+fn apply_theme(ctx: &egui::Context) {
+    let mut visuals = egui::Visuals::dark();
+
+    let void = egui::Color32::from_rgb(0x0B, 0x09, 0x14);
+    let panel = egui::Color32::from_rgb(0x10, 0x0D, 0x1C);
+    let panel_2 = egui::Color32::from_rgb(0x16, 0x11, 0x2A);
+    let primary = egui::Color32::from_rgb(0xFF, 0x6A, 0xC1);
+    let structural = egui::Color32::from_rgb(0x00, 0xE5, 0xC9);
+
+    visuals.panel_fill = panel;
+    visuals.window_fill = panel;
+    visuals.extreme_bg_color = void;
+    visuals.faint_bg_color = panel_2;
+    visuals.override_text_color = Some(egui::Color32::from_rgb(0xED, 0xE7, 0xF6));
+    visuals.hyperlink_color = structural;
+    visuals.selection.bg_fill = primary.gamma_multiply(0.35);
+    visuals.selection.stroke.color = primary;
+    visuals.widgets.active.bg_fill = primary.gamma_multiply(0.45);
+    visuals.widgets.hovered.bg_fill = panel_2;
+    visuals.widgets.inactive.bg_fill = panel_2;
+    visuals.widgets.noninteractive.bg_fill = panel;
+    visuals.window_stroke.color = primary.gamma_multiply(0.35);
+
+    ctx.set_visuals(visuals);
+
+    let mut style = (*ctx.style()).clone();
+    style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+    style.spacing.button_padding = egui::vec2(10.0, 5.0);
+    ctx.set_style(style);
 }
 
 impl App {
     fn identity_pane(&mut self, ui: &mut egui::Ui) {
         let Some(identity) = self.selected_identity().cloned() else {
-            ui.weak("select or mint an identity on the left");
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.strong("No identity yet");
+                ui.label(
+                    "An identity is a label plus a sealed key. Minting one takes a keystroke.",
+                );
+                if ui.button("open the first-run guide").clicked() {
+                    self.pane = Pane::Welcome;
+                }
+            });
             return;
         };
 
@@ -745,7 +863,16 @@ impl App {
         ui.separator();
 
         if self.inbox.is_empty() {
-            ui.weak("nothing sealed for this identity");
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.strong("Nothing here yet");
+                ui.label("When someone seals a message for this identity it shows up here.");
+                ui.weak(
+                    "Send one to yourself to see it work: compose, put your own label in, send.",
+                );
+                if ui.button("go to compose").clicked() {
+                    self.pane = Pane::Compose;
+                }
+            });
             return;
         }
 
@@ -814,6 +941,11 @@ impl App {
                     });
                 }
 
+                if peers.is_empty() {
+                    ui.label(
+                        "No peers yet. The beehive fills as you trust cards and exchange messages.",
+                    );
+                }
                 if !hive.cells.is_empty() {
                     ui.separator();
                     for cell in &hive.cells {
@@ -840,6 +972,129 @@ impl App {
         });
     }
 
+    fn welcome_pane(&mut self, ui: &mut egui::Ui) {
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.heading("Welcome to Arnauth");
+            ui.label("Talk as an email you already own, or a name you mint. No phone number, ever.");
+            ui.add_space(6.0);
+
+            let has_identity = !self.identities.is_empty();
+            let hive = self
+                .home
+                .as_ref()
+                .and_then(|home| Beehive::load(home).ok())
+                .unwrap_or_default();
+            let has_peer = !hive.peers.is_empty();
+            let has_sent = hive.peers.iter().any(|peer| peer.sent > 0);
+            let has_hooks = self
+                .home
+                .as_ref()
+                .and_then(|home| Webhooks::load(home).ok())
+                .map(|hooks| !hooks.all().is_empty())
+                .unwrap_or(false);
+            let has_pq = self
+                .home
+                .as_ref()
+                .and_then(|home| {
+                    self.selected
+                        .as_ref()
+                        .and_then(|label| home.pq(label).ok().flatten())
+                        .map(|_| true)
+                })
+                .unwrap_or(false);
+
+            step_card(ui, 1, "Mint an identity", has_identity, |ui| {
+                if has_identity {
+                    let label = self.selected.clone().unwrap_or_default();
+                    ui.label(format!("you are {}", label));
+                    if ui.button("copy my card").clicked() {
+                        if let Some(home) = self.home.as_ref().cloned() {
+                            if let Ok(card) = home.card(&label) {
+                                if let Ok(json) = card.to_json() {
+                                    ui.ctx().copy_text(json);
+                                    self.note("card copied — send it to the other person");
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.new_label)
+                            .hint_text("you@mail.com   or   kai.eth"),
+                    );
+                    if ui.button("mint it").clicked() {
+                        self.create_identity();
+                        if !self.identities.is_empty() {
+                            self.pane = Pane::Welcome;
+                        }
+                    }
+                    ui.weak("an email you already own, or a name you mint. nothing asks for a number.");
+                }
+            });
+
+            step_card(ui, 2, "Add someone you can talk to", has_peer, |ui| {
+                ui.label("Paste their card, or their whole JSON file contents:");
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.card_paste)
+                        .desired_rows(3)
+                        .desired_width(f32::INFINITY)
+                        .hint_text(r#"{"label":"kai.eth","kind":"name", ...}"#),
+                );
+                if ui.button("trust this card").clicked() {
+                    self.trust_card();
+                }
+                ui.weak("their key is proven by their signature; the name is only theirs once you have their card from them.");
+            });
+
+            step_card(ui, 3, "Say hello", has_sent, |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.compose_to)
+                        .hint_text("who (kai.eth)"),
+                );
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.compose_body)
+                        .desired_rows(2)
+                        .desired_width(f32::INFINITY)
+                        .hint_text("hello"),
+                );
+                if ui.button("seal and send").clicked() {
+                    self.send();
+                }
+                ui.weak("sealed end-to-end. with post-quantum keys the envelope is hybrid.");
+            });
+
+            step_card(ui, 4, "Optional: wire it up", has_hooks || has_pq, |ui| {
+                ui.label(if has_pq {
+                    "✓ this identity holds ml-dsa-65 + ml-kem-768 keys"
+                } else {
+                    "· no post-quantum keys in this identity"
+                });
+                ui.label(if has_hooks {
+                    "✓ a webhook is registered"
+                } else {
+                    "· no webhook yet — `arnauth webhook add http://127.0.0.1:9000/hook`"
+                });
+                ui.weak("agents drive this store with `arnauth mcp` (stdio JSON-RPC).");
+            });
+
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui.button("identity").clicked() {
+                    self.pane = Pane::Identity;
+                }
+                if ui.button("inbox").clicked() {
+                    self.pane = Pane::Inbox;
+                }
+                if ui.button("swarm").clicked() {
+                    self.pane = Pane::Swarm;
+                }
+                if ui.button("help").clicked() {
+                    self.show_help = true;
+                }
+            });
+        });
+    }
+
     fn contacts_pane(&mut self, ui: &mut egui::Ui) {
         let cards = self
             .home
@@ -850,7 +1105,10 @@ impl App {
 
         ui.heading("address book");
         if cards.is_empty() {
-            ui.weak("no cards yet");
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.label("No cards yet. A card is the public half of someone's identity.");
+                ui.weak("Ask them to press \"copy card\" and paste it below.");
+            });
         }
         for card in &cards {
             ui.monospace(format!("{:<40} {}", card.label, hex::encode(card.subject)));
@@ -868,4 +1126,31 @@ impl App {
             self.trust_card();
         }
     }
+}
+
+/// One numbered step in the first-run flow. A completed step folds its body away
+/// so the list stays short, which is the whole point of a checklist.
+fn step_card(
+    ui: &mut egui::Ui,
+    number: usize,
+    title: &str,
+    done: bool,
+    body: impl FnOnce(&mut egui::Ui),
+) {
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            let mark = if done { "✓" } else { "○" };
+            let colour = if done {
+                egui::Color32::from_rgb(0x00, 0xFF, 0x66)
+            } else {
+                egui::Color32::from_rgb(0xFF, 0xD7, 0x00)
+            };
+            ui.colored_label(colour, mark);
+            ui.strong(format!("{number}. {title}"));
+        });
+        if !done {
+            ui.add_space(2.0);
+            body(ui);
+        }
+    });
 }

@@ -25,12 +25,24 @@ permissions: `0600`/`0700` on unix, a no-op elsewhere.
 
 ```bash
 cargo build --workspace          # both binaries
-cargo test --workspace           # 105 tests, no network, no fixtures
+cargo test --workspace           # 122 tests, no network, no fixtures
 cargo run -p arnauth-desktop     # the window
 cargo run -p arnauth-cli -- --help
 ```
 
 Binaries land at `target/debug/arnauth` and `target/debug/arnauth-desktop`.
+
+## First five minutes
+
+```bash
+arnauth quickstart            # mints nothing, prints the two shapes a label can take
+arnauth quickstart kai.eth    # mint, seal, write my-card.json, print next steps
+```
+
+Then hand `~/.arnauth/my-card.json` to the other person. They run
+`arnauth trust my-card.json` and you can talk. The GUI does the same thing as a
+four-step guide that folds each step away once it is done — open it with
+`arnauth-desktop`.
 
 ## CLI
 
@@ -62,6 +74,11 @@ arnauth group list
 # media: chunked, content-addressed, resumable
 arnauth send kai.eth --file photo.jpg          # 64 KiB chunks, blob id = sha256
 arnauth inbox --save ~/Downloads               # reports "3/4 chunks" until whole
+
+# integrations
+arnauth webhook add http://127.0.0.1:9000/hook --event message.received
+arnauth webhook test                     # signed POST, HMAC-SHA256 over the body
+arnauth mcp                              # newline-delimited JSON-RPC on stdio
 
 # relay: one dumb store-and-forward node
 arnauth relay serve --bind 127.0.0.1:8795      # memory only, no disk, no logs
@@ -99,6 +116,8 @@ The store root is `$ARNAUTH_HOME`, then `~/.arnauth`:
 | Post-quantum | `arnauth-core::pq` — hybrid X25519 + ML-KEM-768 establishment and Ed25519 + ML-DSA-65 signatures (FIPS 203/204), wired into envelopes as `mode: hybrid` |
 | Media | `arnauth-core::media` — 64 KiB chunks, `blob_id = sha256(domain‖len‖content)`, per-chunk hashes, resumable staging (`ChunkStore`) |
 | Relay | `arnauth-core::relay` — TCP store-and-forward, queues in memory, bounded, drains on read, no disk and no logs |
+| Webhooks | `arnauth-core::api` — `http://` only, HMAC-SHA256 signature header, failures logged and swallowed |
+| Agents | `arnauth mcp` — MCP over stdio, six tools, tool errors as results not crashes |
 
 `wupz` is used for what it actually is: a fixed-arena ternary pack plus a
 deterministic frame. It is not standing in for a signature; the Ed25519
@@ -154,6 +173,32 @@ cannot open one.
 What it does not buy: Ethereum transaction signatures are secp256k1 and stay
 that way until a PQ precompile or an ERC-4337 account with a PQ verifier exists.
 "Quantum-proof" without that sentence is a lie. See `docs/web3-design.md`.
+
+## Integrations
+
+Two outward faces, by design.
+
+**Webhooks** for systems:
+
+```bash
+arnauth webhook add http://127.0.0.1:9000/hook --event message.received
+# every delivery carries:
+#   X-Arnauth-Signature: <hex hmac_sha256(secret, body)>
+# body: {"event":"message.received","payload":{...},"protocol":"arnauth.webhook.v1"}
+```
+
+Only `http://` with an explicit port is accepted — there is no TLS stack in this
+crate, and saying so beats failing mysteriously. A dead endpoint is logged and
+swallowed; it never stops a message from being read.
+
+**MCP** for agents. `arnauth mcp` is the whole integration surface: the tool
+process runs as you, so it *is* the credential. Six tools —
+`arnauth_whoami`, `arnauth_identities`, `arnauth_peers`, `arnauth_send`,
+`arnauth_inbox`, `arnauth_receipt` — over newline-delimited JSON-RPC on stdio.
+
+```jsonc
+{"mcpServers":{"arnauth":{"command":"arnauth","args":["mcp"]}}}
+```
 
 ## Design
 

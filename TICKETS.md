@@ -19,7 +19,12 @@ or it is not.
 | 11 | Relay survives bad clients | malformed frame closes one connection, nothing else | `malformed_frame_does_not_kill_the_server`, `a_bad_queue_name_is_refused` |
 | 12 | CLI speaks files and relays | `send --file`, `send --via`, `inbox --via`, `inbox --save`, `relay serve` | smoke: 200 KB file → 4 chunks → identical sha256; relay round trip |
 | 13 | GUI reaches the same capability | attach path in compose, PQ status on identity, blob save into `<home>/downloads` | GUI launches clean against a store holding a PQ peer and a received blob |
-| 14 | Spec written before code | `SPEC.md` with REQ-1..5 and named acceptance tests | this file |
+| 14 | Spec written before code | `SPEC.md` with REQ-1..8 and named acceptance tests | this file |
+| 15 | Webhooks, signed and non-blocking | `api::{Webhooks, Event, sign, post_json}`, CLI `webhook add/list/remove/test` | 9 `api::tests`, plus an independent Python HMAC check |
+| 16 | Inbox fires webhooks | `message.received`, `blob.completed` on arrival, CLI and GUI | live run: `webhook http://… ← message.received` |
+| 17 | MCP over stdio | `arnauth mcp`, 6 tools, JSON-RPC on stdin/stdout | 8 `mcp::tests`, plus a 5-request live pipe |
+| 18 | First run that explains itself | `arnauth quickstart`, GUI welcome flow with folding steps | live run on empty and populated stores |
+| 19 | GUI polish | ultralovegod theme, help overlay, honest empty states | both stores launch clean, no panic |
 
 ## Deliberately not ticketed (out of scope for v1)
 

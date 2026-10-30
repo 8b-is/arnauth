@@ -12,7 +12,7 @@ Rust workspace. Two binaries over one library:
 
 ```bash
 cd ~/workspace/peterlodri-sec/arnauth
-cargo test --workspace         # 105 tests, offline
+cargo test --workspace         # 122 tests, offline
 cargo clippy --workspace --all-targets
 cargo fmt --all
 cargo run -p arnauth-desktop
@@ -58,6 +58,14 @@ export ARNAUTH_HOME=/tmp/arnauth-smoke && rm -rf $ARNAUTH_HOME
   shipping `envelope.v2` and a capability negotiated in the contact card; v1
   messages must keep opening. Do not describe the product as "quantum-proof"
   without the on-chain caveat in `docs/web3-design.md` §2.3.
+- **Webhooks never block.** A delivery failure is logged and swallowed; message
+  handling must not depend on someone else's server being up. HTTPS is refused
+  on purpose (no TLS in this crate) — do not "fix" it by silently allowing http
+  fallbacks from https URLs.
+- **MCP is the agent API.** Tool errors are results with `isError: true`, never
+  a panic or a process exit; stderr is for diagnostics, stdout is protocol.
+- **First run must stay self-explaining.** `quickstart` and the GUI guide only
+  list steps that are actually missing. If you add a capability, add its step.
 - **No invented rails.** There is no network transport. If a caller wants one,
   it goes through `transport::Spool` or a new module with its own tests, not into
   a fake `send`.
