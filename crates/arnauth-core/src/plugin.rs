@@ -12,9 +12,10 @@
 //! would treat an unfamiliar shell script.
 
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -149,9 +150,15 @@ impl Plugins {
     }
 }
 
-/// Start one plugin with the event on stdin. Output is captured, bounded by the
-/// timeout, and trimmed to something a terminal can show.
+/// Start one plugin with the event on stdin. Output is captured, bounded by
+/// [`PLUGIN_TIMEOUT_MS`], and trimmed to something a terminal can show.
 pub fn run(plugin: &Plugin, event: &Event) -> PluginRun {
+    run_with_timeout(plugin, event, PLUGIN_TIMEOUT_MS)
+}
+
+/// `run`, with an explicit deadline. A plugin that does not finish in time is
+/// killed, because a hanging plugin must not hang the inbox that dispatched it.
+pub fn run_with_timeout(plugin: &Plugin, event: &Event, timeout_ms: u64) -> PluginRun {
     let Some(shell_cmd) = shell_line(plugin) else {
         return PluginRun {
             name: plugin.name.clone(),
@@ -160,9 +167,7 @@ pub fn run(plugin: &Plugin, event: &Event) -> PluginRun {
         };
     };
 
-    let mut child = match Command::new("/bin/sh")
-        .arg("-c")
-        .arg(&shell_cmd)
+    let mut child = match shell_command(&shell_cmd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -185,21 +190,42 @@ pub fn run(plugin: &Plugin, event: &Event) -> PluginRun {
         // Dropping stdin closes it, which is how a plugin knows the event ended.
     }
 
-    let output = match child.wait_with_output() {
-        Ok(output) => output,
-        Err(e) => {
-            return PluginRun {
-                name: plugin.name.clone(),
-                ok: false,
-                output: format!("could not wait: {e}"),
-            };
+    // Drain both pipes on their own threads. A plugin that writes more than a
+    // pipe buffer would otherwise block forever while we poll for exit.
+    let stdout_reader = child.stdout.take().map(spawn_reader);
+    let stderr_reader = child.stderr.take().map(spawn_reader);
+
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms.max(1));
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return PluginRun {
+                        name: plugin.name.clone(),
+                        ok: false,
+                        output: format!("timed out after {timeout_ms} ms"),
+                    };
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                return PluginRun {
+                    name: plugin.name.clone(),
+                    ok: false,
+                    output: format!("could not wait: {e}"),
+                };
+            }
         }
     };
 
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = join_reader(stdout_reader);
+    let stderr = join_reader(stderr_reader);
 
-    if output.status.success() {
+    if status.success() {
         PluginRun {
             name: plugin.name.clone(),
             ok: true,
@@ -215,7 +241,7 @@ pub fn run(plugin: &Plugin, event: &Event) -> PluginRun {
             ok: false,
             output: clip(&format!(
                 "exit {}{}",
-                output.status.code().unwrap_or(-1),
+                status.code().unwrap_or(-1),
                 if stderr.is_empty() {
                     String::new()
                 } else {
@@ -223,6 +249,43 @@ pub fn run(plugin: &Plugin, event: &Event) -> PluginRun {
                 }
             )),
         }
+    }
+}
+
+fn spawn_reader(mut pipe: impl Read + Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = pipe.read_to_end(&mut buf);
+        buf
+    })
+}
+
+fn join_reader(handle: Option<std::thread::JoinHandle<Vec<u8>>>) -> String {
+    match handle.and_then(|h| h.join().ok()) {
+        Some(bytes) => String::from_utf8_lossy(&bytes).trim().to_string(),
+        None => String::new(),
+    }
+}
+
+/// `/bin/sh` where it exists, `cmd /C` where it does not. Same contract.
+fn shell_command(line: &str) -> Command {
+    #[cfg(windows)]
+    {
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/C", line]);
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        cmd
+    }
+    #[cfg(not(windows))]
+    {
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args(["-c", line]);
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        cmd
     }
 }
 
@@ -255,10 +318,15 @@ fn shell_quote(raw: &str) -> String {
 fn clip(text: &str) -> String {
     const MAX: usize = 2000;
     if text.len() <= MAX {
-        text.to_string()
-    } else {
-        format!("{}… ({} bytes)", &text[..MAX], text.len())
+        return text.to_string();
     }
+    // Never slice through a multi-byte character: a plugin emitting kanji at
+    // byte 2000 must not be able to panic the inbox.
+    let mut end = MAX;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}… ({} bytes)", &text[..end], text.len())
 }
 
 #[cfg(test)]
@@ -352,6 +420,55 @@ mod tests {
         assert!(run.output.contains("exit 3"), "got {}", run.output);
     }
 
+    fn plugin_with(name: &str, command: &str, args: &[&str], events: &[&str]) -> Plugin {
+        Plugin {
+            name: name.into(),
+            command: command.into(),
+            args: args.iter().map(|a| a.to_string()).collect(),
+            events: events.iter().map(|e| e.to_string()).collect(),
+            description: String::new(),
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn a_hanging_plugin_is_killed_at_the_deadline() {
+        let hanging = plugin_with("hang", "sleep", &["30"], &["*"]);
+        let started = std::time::Instant::now();
+
+        let run = run_with_timeout(&hanging, &Event::message_received("a", "b", 1), 150);
+
+        assert!(!run.ok);
+        assert!(run.output.contains("timed out"), "got {}", run.output);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the deadline must actually bite, took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_chatty_plugin_does_not_deadlock_on_a_full_pipe() {
+        // ~256 KiB of stdout is well past a pipe buffer, so a naive
+        // wait-then-read would block forever.
+        let chatty = plugin_with(
+            "chatty",
+            "/bin/sh",
+            &["-c", "head -c 262144 /dev/zero | tr '\\0' 'x'"],
+            &["*"],
+        );
+        let run = run_with_timeout(&chatty, &Event::message_received("a", "b", 1), 5_000);
+
+        assert!(run.ok, "chatty plugin failed: {}", run.output);
+        assert!(
+            run.output.contains("(262144 bytes)"),
+            "clipped output should say how much arrived, got {} bytes",
+            run.output.len()
+        );
+        assert!(run.output.len() < 3000, "output should be clipped");
+    }
+
     #[test]
     fn a_missing_command_is_reported() {
         let missing = plugin("missing", "/nonexistent/plugin-binary", &["*"]);
@@ -374,6 +491,28 @@ mod tests {
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].name, "cat");
         assert!(runs[0].ok);
+    }
+
+    #[test]
+    fn clipping_never_splits_a_character() {
+        let text = "界".repeat(1500); // 4.5 KB of multi-byte characters
+        let clipped = clip(&text);
+        assert!(clipped.len() < text.len());
+        assert!(clipped.contains("bytes)"));
+
+        let ascii = "x".repeat(10);
+        assert_eq!(clip(&ascii), ascii, "short output is untouched");
+    }
+
+    #[test]
+    fn the_command_is_a_program_not_a_shell_line() {
+        // `command` is the executable; spaces belong in `args`. A typo like
+        // "sleep 30" must fail loudly instead of being interpreted by a shell.
+        let run = run(
+            &plugin("typo", "sleep 30", &["*"]),
+            &Event::message_received("a", "b", 1),
+        );
+        assert!(!run.ok, "a spaced command must not be run as a shell line");
     }
 
     #[test]

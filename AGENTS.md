@@ -12,7 +12,7 @@ Rust workspace. Two binaries over one library:
 
 ```bash
 cd ~/workspace/peterlodri-sec/arnauth
-cargo test --workspace         # 133 tests, offline
+cargo test --workspace         # 147 tests, offline
 cargo clippy --workspace --all-targets
 cargo fmt --all
 cargo run -p arnauth-desktop
@@ -63,6 +63,10 @@ export ARNAUTH_HOME=/tmp/arnauth-smoke && rm -rf $ARNAUTH_HOME
   shipping `envelope.v2` and a capability negotiated in the contact card; v1
   messages must keep opening. Do not describe the product as "quantum-proof"
   without the on-chain caveat in `docs/web3-design.md` §2.3.
+- **A plugin must never be able to hang the inbox.** The deadline is real
+  (`run_with_timeout`), pipes are drained on threads, and output is clipped on a
+  char boundary. Three separate tests guard those three failure modes; do not
+  "simplify" them away.
 - **A plugin runs as the user.** Never add remote installation, a plugin
   marketplace, or anything that fetches and executes without a human typing
   `plugin add`. Arguments are shell-quoted; keep it that way.

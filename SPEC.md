@@ -153,7 +153,9 @@ panic against a store containing a PQ peer and a received blob.
    `X-Arnauth-Signature: hex(hmac_sha256(secret, body))` over the exact bytes.
 4. Delivery failure is logged and swallowed: a dead endpoint must not stop a
    message from being read.
-5. Events: `message.received {from, channel, bytes}`,
+5. Connect and read/write are bounded (3 s / 5 s): a receiver that blackholes
+   packets must not stall the inbox for the kernel's SYN timeout.
+6. Events: `message.received {from, channel, bytes}`,
    `blob.completed {name, kind, bytes, path}`, `webhook.test`.
 
 ### Acceptance
@@ -196,7 +198,9 @@ guide when the store is empty, and every step folds away once done.
 3. Arguments are shell-quoted, so `--arg "a b; rm -rf /"` is one argument.
 4. A failing, missing, or silent plugin is reported and never fatal.
 5. A disabled plugin never runs.
-6. **A plugin runs as the user.** The registry is not remote-installable.
+7. **A plugin runs as the user.** The registry is not remote-installable.
+8. `command` is a program, not a shell line; arguments go in `args` and are
+   quoted. `cmd /C` on Windows, `/bin/sh -c` elsewhere.
 
 Acceptance: `plugin::tests::{registry_round_trips, a_real_plugin_receives_the_event_on_stdin,
 a_failing_plugin_is_reported_not_fatal, dispatch_only_runs_interested_plugins,

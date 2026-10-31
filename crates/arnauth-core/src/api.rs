@@ -15,8 +15,9 @@
 
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
@@ -26,6 +27,12 @@ use crate::error::{Error, Result};
 use crate::store::Home;
 
 const SIGNATURE_HEADER: &str = "X-Arnauth-Signature";
+
+/// A webhook receiver that blackholes packets must not stall the inbox for the
+/// kernel's default SYN timeout (which can be over a minute).
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+/// Same reasoning for a receiver that accepts and then goes quiet.
+const IO_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// One registered endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -238,10 +245,7 @@ fn split_http_url(url: &str) -> Result<(String, String)> {
 /// A deliberately small HTTP/1.1 POST. One request, one response, no pooling.
 pub fn post_json(url: &str, body: &[u8], signature: &str) -> Result<String> {
     let (authority, path) = split_http_url(url)?;
-    let mut stream = TcpStream::connect(&authority).map_err(|e| Error::Io {
-        path: PathBuf::from(&authority),
-        source: e,
-    })?;
+    let mut stream = connect_with_deadline(&authority)?;
 
     let head = format!(
         "POST {path} HTTP/1.1\r\nHost: {authority}\r\nContent-Type: application/json\r\nContent-Length: {len}\r\n{SIGNATURE_HEADER}: {signature}\r\nConnection: close\r\n\r\n",
@@ -268,6 +272,30 @@ pub fn post_json(url: &str, body: &[u8], signature: &str) -> Result<String> {
     let _ = reader.read_to_end(&mut rest);
     sink.extend_from_slice(&rest);
     Ok(status.trim_end().to_string())
+}
+
+fn connect_with_deadline(authority: &str) -> Result<TcpStream> {
+    let addr = authority
+        .to_socket_addrs()
+        .map_err(|e| Error::Io {
+            path: PathBuf::from(authority),
+            source: e,
+        })?
+        .next()
+        .ok_or_else(|| Error::Malformed {
+            what: "webhook url",
+            detail: format!("{authority:?} did not resolve to an address"),
+        })?;
+
+    let stream = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT).map_err(|e| Error::Io {
+        path: PathBuf::from(authority),
+        source: e,
+    })?;
+    stream.set_read_timeout(Some(IO_TIMEOUT)).map_err(http_io)?;
+    stream
+        .set_write_timeout(Some(IO_TIMEOUT))
+        .map_err(http_io)?;
+    Ok(stream)
 }
 
 fn http_io(e: std::io::Error) -> Error {
@@ -407,6 +435,20 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed["event"], "message.received");
         assert_eq!(parsed["payload"]["from"], "kai.eth");
+    }
+
+    #[test]
+    fn an_unresolvable_endpoint_fails_fast() {
+        let started = std::time::Instant::now();
+        let err = post_json("http://no-such-host.invalid:9000/hook", b"{}", "00").unwrap_err();
+        assert!(
+            started.elapsed() < CONNECT_TIMEOUT + Duration::from_secs(2),
+            "resolution must not hang"
+        );
+        assert!(
+            err.to_string().contains("io error") || err.to_string().contains("not resolve"),
+            "got {err}"
+        );
     }
 
     #[test]

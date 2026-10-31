@@ -215,7 +215,7 @@ desk that can help. That is the trade.
 | On-chain anything | designed, not built — see `docs/web3-design.md` |
 
 ```bash
-cargo test --workspace        # 133 tests, offline
+cargo test --workspace        # 147 tests, offline
 cargo clippy --workspace --all-targets
 cargo fmt --all --check
 ```
@@ -225,6 +225,7 @@ cargo fmt --all --check
 - `docs/web3-design.md` — interface, chain architecture, monetization
 - `brand/index.html` — landing page
 - `brand/ui-mock.html` — interface mock
+- `REVIEW.md` — a self-review: what holds up, what was broken, what is still wrong
 - `docs/monetization-oss.md` — verified OSS inventory for Ethereum monetization
   (stars, licences, last-push dates checked on the day)
 
