@@ -230,3 +230,18 @@ cargo fmt --all --check
   (stars, licences, last-push dates checked on the day)
 
 AGPL-3.0-only, matching `wupz-core`, which this crate links.
+
+## wupz-core integration
+
+The integrity seals (`seal_row`, `seal_frame_32b`, `seal_litany_wire_64b`,
+`pack_gaia_b158_into`, and their `verify_*` counterparts) come from
+[**`8b-is/wupz`**](https://github.com/8b-is/wupz) — the experimental
+incremental linker + compressor.
+
+- **`0x62` gate** — single byte tag on every frame
+- **`qt:55`** — balanced ternary quantisation level
+- **Arena** — pre-sized, zero-alloc packing path
+- **Fold** — XOR of raw + packed bytes, Zig SIMD or Rust scalar
+
+See [`wupz/wupz-rs/src/fold.rs`](../wupz/wupz-rs/src/fold.rs) for the shared
+surface used by `identity`, `seal`, and `beehive` modules.
