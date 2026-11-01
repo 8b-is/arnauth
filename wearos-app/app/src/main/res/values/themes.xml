@@ -1,0 +1,8 @@
+<resources>
+    <style name="Theme.ArnauthWearOS" parent="androidx.wear.compose.material3.theme.Material3Theme">
+        <item name="colorPrimary">@color/purple_200</item>
+        <item name="colorOnPrimary">@color/black</item>
+        <item name="colorSecondary">@color/teal_200</item>
+        <item name="colorOnSecondary">@color/black</item>
+    </style>
+</resources>

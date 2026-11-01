@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">Arnauth</string>
+    <string name="identity_label">Identity</string>
+    <string name="peers_label">Peers</string>
+    <string name="inbox_label">Inbox</string>
+    <string name="send_label">Send</string>
+    <string name="settings_label">Settings</string>
+    <string name="no_identity">No identity — run quickstart</string>
+    <string name="sync_status">Syncing…</string>
+    <string name="ready_status">Ready</string>
+</resources>
