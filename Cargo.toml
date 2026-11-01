@@ -37,3 +37,11 @@ ml-dsa = { version = "0.1", features = ["getrandom", "zeroize"] }
 dirs = "6"
 clap = { version = "4", features = ["derive"] }
 eframe = "0.32"
+
+# Cross-compilation targets
+[target.aarch64-linux-android]
+ar = "llvm-ar"
+linker = "aarch64-linux-android24-clang"
+
+[target.aarch64-linux-android.dependencies]
+getrandom = { version = "0.2", features = ["js"] }

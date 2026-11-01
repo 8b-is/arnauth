@@ -24,3 +24,7 @@ chacha20poly1305.workspace = true
 ml-kem.workspace = true
 ml-dsa.workspace = true
 dirs.workspace = true
+getrandom = { version = "0.2", features = [], default-features = false }
+
+[target.'cfg(target_os = "android")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
